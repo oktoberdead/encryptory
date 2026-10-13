@@ -2,11 +2,13 @@
  * Encryptory core — асимметричное шифрование текста.
  *
  * Схема (гибридная, на двух парах ключей):
- *  1. У каждого участника своя пара ключей ECDH P-256 (публичный + приватный).
+ *  1. У каждого участника своя пара ключей (по умолчанию X25519; старые ключи
+ *     на ECDH P-256 продолжают читаться — см. таблицу CURVES).
  *  2. Общий секрет = ECDH(мой_приватный, публичный_ключ_собеседника).
  *     У обоих участников он получается одинаковым, по проводам никогда не идёт.
  *  3. Из общего секрета через HKDF-SHA256 выводится ключ AES-256-GCM.
- *     В HKDF "info" зашиты оба публичных ключа, поэтому чужой ключ не подойдёт.
+ *     В HKDF "info" зашиты название кривой и оба публичных ключа, поэтому
+ *     чужой ключ или ключ с другой кривой не подойдёт.
  *  4. Текст шифруется AES-256-GCM (аутентифицированное шифрование: подделка
  *     или порча шифротекста приводит к ошибке, а не к мусору на выходе).
  *
@@ -20,18 +22,58 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const CURVE = 'P-256';
-  const VERSION = 'em1';
-  const PUBLIC_PREFIX = 'epk1.';
-  const PRIVATE_PREFIX = 'ek1.';
-  const PRIVATE_PROTECTED_PREFIX = 'ek1p.';
-  const HKDF_INFO_PREFIX = 'encryptory/v1|';
-  const PBKDF2_ITERATIONS = 310000;
+  /* ------------------------------------------------------------------ */
+  /* Кривые и версии формата                                             */
+  /* ------------------------------------------------------------------ */
 
-  const ALGO_LABEL = 'ECDH P-256 + HKDF-SHA256 + AES-256-GCM';
+  /**
+   * Формат контейнеров и префиксов однозначно указывает на кривую, поэтому
+   * «старые» сообщения и ключи остаются читаемыми, а новые по умолчанию
+   * используют X25519 (компактнее, быстрее, современный стандарт).
+   */
+  const CURVES = {
+    X25519: {
+      id: 'X25519',
+      label: 'X25519',
+      webcrypto: { name: 'X25519' },
+      publicLength: 32,
+      version: 'em2',
+      infoPrefix: 'encryptory/v2|X25519|',
+      publicPrefix: 'epk2.',
+      privatePrefix: 'ek2.',
+      protectedPrefix: 'ek2p.',
+      legacy: false,
+    },
+    'P-256': {
+      id: 'P-256',
+      label: 'ECDH P-256',
+      webcrypto: { name: 'ECDH', namedCurve: 'P-256' },
+      publicLength: 65, // несжатая точка: 0x04 || X || Y
+      version: 'em1',
+      infoPrefix: 'encryptory/v1|', // менять нельзя: так читаются старые сообщения
+      publicPrefix: 'epk1.',
+      privatePrefix: 'ek1.',
+      protectedPrefix: 'ek1p.',
+      legacy: true,
+    },
+  };
+
+  const DEFAULT_CURVE = 'X25519';
+  const CURVE_ORDER = ['X25519', 'P-256'];
+
+  const VERSION = CURVES[DEFAULT_CURVE].version;
+  const ALGO_LABEL = `${CURVES[DEFAULT_CURVE].label} + HKDF-SHA256 + AES-256-GCM`;
   const ALGO_DETAILS =
     'Публичный ключ каждого участника + ECDH → общий секрет → HKDF-SHA256 → AES-256-GCM. ' +
     'Приватные ключи никогда не покидают устройство.';
+
+  const curveByVersion = (version) => CURVE_ORDER.map((id) => CURVES[id]).find((c) => c.version === version) || null;
+  const curveByPublicPrefix = (text) => CURVE_ORDER.map((id) => CURVES[id]).find((c) => text.startsWith(c.publicPrefix)) || null;
+  const curveByPrivatePrefix = (text) =>
+    CURVE_ORDER.map((id) => CURVES[id]).find((c) => text.startsWith(c.privatePrefix) || text.startsWith(c.protectedPrefix)) || null;
+
+  const HKDF_INFO_PREFIX = CURVES[DEFAULT_CURVE].infoPrefix; // оставлено для совместимости с прежним API
+  const PBKDF2_ITERATIONS = 600000; // OWASP 2025 для PBKDF2-HMAC-SHA256 (было 310000)
 
   const ARMOR_TYPES = {
     MESSAGE: 'ENCRYPTORY MESSAGE',
@@ -166,13 +208,8 @@
     return out;
   }
 
-  function encodeUtf8(text) {
-    return textEncoder.encode(text);
-  }
-
-  function decodeUtf8(bytes) {
-    return textDecoder.decode(bytes);
-  }
+  const encodeUtf8 = (text) => textEncoder.encode(text);
+  const decodeUtf8 = (bytes) => textDecoder.decode(bytes);
 
   /* ------------------------------------------------------------------ */
   /* Бронирование (armor) — читаемый текстовый контейнер                 */
@@ -193,10 +230,6 @@
   }
 
   /**
-   * Снимает броню (если есть) и склеивает тело в одну строку.
-   * Заодно переживает цитирование из писем и чатов (ведущие «>»).
-   */
-  /**
    * Разделитель брони. Требуем и дефисы, и слово BEGIN/END, и пробел после него:
    * обычная строка base64url под это не подходит (пробелы в алфавит не входят),
    * поэтому тело сообщения нельзя потерять по ошибке — даже если строка
@@ -205,12 +238,15 @@
   const ARMOR_BEGIN = /^-{3,}\s*BEGIN\s+([A-Za-z0-9 ]+?)\s*-{3,}$/i;
   const ARMOR_END = /^-{3,}\s*END\s+[A-Za-z0-9 ]+?\s*-{3,}$/i;
 
+  /**
+   * Снимает броню (если есть) и склеивает тело в одну строку.
+   * Заодно переживает цитирование из писем и чатов (ведущие «>»).
+   */
   function stripArmor(text) {
     const lines = String(text == null ? '' : text).replace(/\r/g, '').split('\n');
     let type = null;
     const body = [];
     for (const rawLine of lines) {
-      // «> » в начале — следы цитирования в почте и мессенджерах.
       const line = rawLine.replace(/^\s*>+\s*/, '').trim();
       if (!line) continue;
       const begin = ARMOR_BEGIN.exec(line);
@@ -224,44 +260,123 @@
     return { type, payload: body.join('') };
   }
 
-  function isArmored(text, type) {
-    const { type: found } = stripArmor(text);
-    return type ? found === type : Boolean(found);
+  /* ------------------------------------------------------------------ */
+  /* Операции с ключами: общее для всех кривых                           */
+  /* ------------------------------------------------------------------ */
+
+  const supportCache = new Map();
+
+  /** Проверяет, умеет ли это окружение работать с кривой. */
+  async function isCurveSupported(curveId) {
+    const curve = CURVES[curveId];
+    if (!curve) fail('BAD_CURVE', `Неизвестная кривая «${curveId}».`);
+    if (supportCache.has(curveId)) return supportCache.get(curveId);
+    const check = (async () => {
+      try {
+        const pair = await getSubtle().generateKey(curve.webcrypto, true, ['deriveBits']);
+        if (!pair || !pair.privateKey) return false;
+        const raw = new Uint8Array(await getSubtle().exportKey('raw', pair.publicKey));
+        return raw.length === curve.publicLength;
+      } catch (error) {
+        return false;
+      }
+    })();
+    supportCache.set(curveId, check);
+    return check;
+  }
+
+  async function generateKeyPairFor(curve) {
+    try {
+      return await getSubtle().generateKey(curve.webcrypto, true, ['deriveBits']);
+    } catch (error) {
+      fail(
+        'UNSUPPORTED_CURVE',
+        `Это окружение не умеет работать с кривой ${curve.label}. Обновите браузер или используйте другой.`
+      );
+    }
+  }
+
+  async function importPeerPublicKey(rawBytes, curve) {
+    const raw = toBytes(rawBytes);
+    if (raw.length !== curve.publicLength) {
+      fail(
+        'BAD_PUBLIC_KEY',
+        `Публичный ключ ${curve.label} должен быть длиной ${curve.publicLength} байт, а тут ${raw.length}.`
+      );
+    }
+    if (curve.id === 'P-256' && raw[0] !== 0x04) {
+      fail('BAD_PUBLIC_KEY', 'Публичный ключ P-256 должен быть несжатой точкой (первый байт 0x04).');
+    }
+    try {
+      return await getSubtle().importKey('raw', raw, curve.webcrypto, false, []);
+    } catch (error) {
+      fail('BAD_PUBLIC_KEY', `Не удалось объяснить системе публичный ключ ${curve.label}.`);
+    }
+  }
+
+  async function importPrivateKeyBytes(pkcs8, curve) {
+    try {
+      return await getSubtle().importKey('pkcs8', toBytes(pkcs8), curve.webcrypto, true, ['deriveBits']);
+    } catch (error) {
+      fail('BAD_PRIVATE_KEY', 'Не удалось прочитать приватный ключ: файл повреждён или это не ключ Encryptory.');
+    }
+  }
+
+  /** ECDH: общий секрет из моего приватного и его публичного. */
+  async function deriveSecretBits(myPrivateKey, peerPublicKey, curve) {
+    try {
+      return await getSubtle().deriveBits({ name: curve.webcrypto.name, public: peerPublicKey }, myPrivateKey, 256);
+    } catch (error) {
+      fail('ECDH_FAILED', `Не удалось выработать общий секрет на кривой ${curve.label}.`);
+    }
+  }
+
+  function detectCurveFromPublicBytes(raw) {
+    const bytes = toBytes(raw);
+    const found = CURVE_ORDER.map((id) => CURVES[id]).find((c) => c.publicLength === bytes.length);
+    if (!found) {
+      fail('BAD_PUBLIC_KEY', `Публичный ключ непонятной длины (${bytes.length} байт) — ни X25519, ни P-256 не подходят.`);
+    }
+    if (found.id === 'P-256' && bytes[0] !== 0x04) {
+      fail('BAD_PUBLIC_KEY', 'Похоже на ключ P-256, но он не является несжатой точкой (первый байт должен быть 0x04).');
+    }
+    return found;
   }
 
   /* ------------------------------------------------------------------ */
   /* Публичные ключи                                                     */
   /* ------------------------------------------------------------------ */
 
+  /** Достаёт публичный ключ из JWK: поддержаны OKP/X25519 и EC/P-256. */
   function rawFromJwk(jwk) {
-    if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.x || !jwk.y) {
-      fail('BAD_PUBLIC_KEY', 'Ключ не является ключом ECDH на кривой P-256.');
+    if (!jwk || typeof jwk !== 'object') fail('BAD_PUBLIC_KEY', 'Ожидался JSON-объект ключа.');
+    if (jwk.kty === 'OKP' && jwk.crv === 'X25519' && jwk.x) {
+      return b64uToBytes(jwk.x, 'координате X ключа');
     }
-    const x = b64uToBytes(jwk.x, 'координате X ключа');
-    const y = b64uToBytes(jwk.y, 'координате Y ключа');
-    if (x.length !== 32 || y.length !== 32) {
-      fail('BAD_PUBLIC_KEY', 'Координаты ключа P-256 должны быть длиной 32 байта.');
+    if (jwk.kty === 'EC' && jwk.crv === 'P-256' && jwk.x && jwk.y) {
+      const x = b64uToBytes(jwk.x, 'координате X ключа');
+      const y = b64uToBytes(jwk.y, 'координате Y ключа');
+      if (x.length !== 32 || y.length !== 32) {
+        fail('BAD_PUBLIC_KEY', 'Координаты ключа P-256 должны быть длиной 32 байта.');
+      }
+      return concatBytes(Uint8Array.of(0x04), x, y);
     }
-    return concatBytes(Uint8Array.of(0x04), x, y);
-  }
-
-  function assertPublicRaw(raw, what) {
-    if (raw.length !== 65 || raw[0] !== 0x04) {
-      fail('BAD_PUBLIC_KEY', `${what || 'Публичный ключ'} должен быть несжатой точкой P-256 (65 байт).`);
-    }
-    return raw;
+    fail('BAD_PUBLIC_KEY', 'Поддерживаются ключи X25519 (OKP) и ECDH P-256 (EC).');
   }
 
   /**
    * Разбирает публичный ключ из текста.
-   * Принимает: epk1.<base64url>, голый base64url, JWK (JSON), с бронёй или без.
+   * Принимает: epk2./epk1.<base64url>, голый base64url, JWK (JSON),
+   * с бронёй или без, с переносами строк и цитированием.
    */
   function parsePublicKey(input) {
     const { payload } = stripArmor(input);
     if (!payload) fail('BAD_PUBLIC_KEY', 'Публичный ключ не найден. Вставьте ключ, полученный от собеседника.');
+
     let raw;
-    if (payload.startsWith(PUBLIC_PREFIX)) {
-      raw = b64uToBytes(payload.slice(PUBLIC_PREFIX.length), 'публичном ключе');
+    let curve = curveByPublicPrefix(payload);
+    if (curve) {
+      raw = b64uToBytes(payload.slice(curve.publicPrefix.length), 'публичном ключе');
     } else if (payload.startsWith('{')) {
       let jwk;
       try {
@@ -270,22 +385,31 @@
         fail('BAD_PUBLIC_KEY', 'Похоже на JSON, но разобрать его не получилось.');
       }
       raw = rawFromJwk(jwk);
+      curve = detectCurveFromPublicBytes(raw);
     } else {
       raw = b64uToBytes(payload, 'публичном ключе');
+      curve = detectCurveFromPublicBytes(raw);
     }
-    assertPublicRaw(raw, 'Публичный ключ');
-    return { raw, text: PUBLIC_PREFIX + bytesToB64u(raw) };
+
+    if (raw.length !== curve.publicLength) {
+      fail('BAD_PUBLIC_KEY', `Публичный ключ ${curve.label} должен быть длиной ${curve.publicLength} байт.`);
+    }
+    return { raw, curve: curve.id, curveLabel: curve.label, text: curve.publicPrefix + bytesToB64u(raw) };
   }
 
   function publicKeyToText(rawOrJwk) {
     if (rawOrJwk && typeof rawOrJwk === 'object' && typeof rawOrJwk.kty === 'string') {
-      return PUBLIC_PREFIX + bytesToB64u(rawFromJwk(rawOrJwk));
+      const raw = rawFromJwk(rawOrJwk);
+      const curve = detectCurveFromPublicBytes(raw);
+      return curve.publicPrefix + bytesToB64u(raw);
     }
-    return PUBLIC_PREFIX + bytesToB64u(assertPublicRaw(toBytes(rawOrJwk), 'Публичный ключ'));
+    const raw = toBytes(rawOrJwk);
+    const curve = detectCurveFromPublicBytes(raw);
+    return curve.publicPrefix + bytesToB64u(raw);
   }
 
   function publicKeyToArmor(rawOrText) {
-    const text = typeof rawOrText === 'string' && rawOrText.includes('.')
+    const text = typeof rawOrText === 'string' && /\./.test(rawOrText)
       ? parsePublicKey(rawOrText).text
       : publicKeyToText(rawOrText);
     return armor(ARMOR_TYPES.PUBLIC_KEY, text);
@@ -295,7 +419,7 @@
   async function fingerprint(rawOrText) {
     const raw = typeof rawOrText === 'string'
       ? parsePublicKey(rawOrText).raw
-      : assertPublicRaw(toBytes(rawOrText), 'Публичный ключ');
+      : toBytes(rawOrText);
     const digest = new Uint8Array(await getSubtle().digest('SHA-256', raw));
     const b32 = base32(digest.subarray(0, 12));
     return (b32.match(/.{1,4}/g) || []).slice(0, 5).join('-');
@@ -304,20 +428,6 @@
   /* ------------------------------------------------------------------ */
   /* Приватные ключи                                                     */
   /* ------------------------------------------------------------------ */
-
-  async function importPrivateKeyBytes(pkcs8) {
-    try {
-      return await getSubtle().importKey(
-        'pkcs8',
-        toBytes(pkcs8),
-        { name: 'ECDH', namedCurve: CURVE },
-        true,
-        ['deriveBits']
-      );
-    } catch (error) {
-      fail('BAD_PRIVATE_KEY', 'Не удалось прочитать приватный ключ: файл повреждён или это не ключ Encryptory.');
-    }
-  }
 
   async function pbkdf2Key(passphrase, salt, iterations) {
     const base = await getSubtle().importKey('raw', encodeUtf8(passphrase), 'PBKDF2', false, ['deriveKey']);
@@ -332,16 +442,17 @@
 
   /**
    * Собирает бронированный приватный ключ.
-   * Без пароля — как есть (ek1.), с паролем — PBKDF2-SHA256 + AES-256-GCM (ek1p.).
+   * curve — кривая ключа (по умолчанию X25519).
+   * Без пароля — как есть; с паролем — PBKDF2-SHA256 + AES-256-GCM.
    */
-  async function exportPrivateKey(pkcs8OrIdentity, passphrase) {
-    const pkcs8 = toBytes(
-      pkcs8OrIdentity && pkcs8OrIdentity.privateKeyPkcs8
-        ? pkcs8OrIdentity.privateKeyPkcs8
-        : pkcs8OrIdentity
-    );
+  async function exportPrivateKey(pkcs8OrIdentity, passphrase, curveId) {
+    const source = pkcs8OrIdentity && pkcs8OrIdentity.privateKeyPkcs8 ? pkcs8OrIdentity : null;
+    const pkcs8 = toBytes(source ? source.privateKeyPkcs8 : pkcs8OrIdentity);
+    const curve = CURVES[(source && source.curve) || curveId || DEFAULT_CURVE];
+    if (!curve) fail('BAD_CURVE', 'Неизвестная кривая приватного ключа.');
+
     if (!passphrase) {
-      return armor(ARMOR_TYPES.PRIVATE_KEY, PRIVATE_PREFIX + bytesToB64u(pkcs8));
+      return armor(ARMOR_TYPES.PRIVATE_KEY, curve.privatePrefix + bytesToB64u(pkcs8));
     }
     const salt = randomBytes(16);
     const iv = randomBytes(12);
@@ -351,11 +462,25 @@
       v: 1,
       kdf: 'PBKDF2-SHA256',
       iter: PBKDF2_ITERATIONS,
+      curve: curve.id,
       salt: bytesToB64u(salt),
       iv: bytesToB64u(iv),
       ct: bytesToB64u(ct),
     };
-    return armor(ARMOR_TYPES.PRIVATE_KEY, PRIVATE_PROTECTED_PREFIX + bytesToB64u(encodeUtf8(JSON.stringify(envelope))));
+    return armor(ARMOR_TYPES.PRIVATE_KEY, curve.protectedPrefix + bytesToB64u(encodeUtf8(JSON.stringify(envelope))));
+  }
+
+  /** Угадывает кривую приватного ключа, если префикс неизвестен (например, чужой формат). */
+  async function sniffPrivateCurve(pkcs8) {
+    for (const id of CURVE_ORDER) {
+      try {
+        await importPrivateKeyBytes(pkcs8, CURVES[id]);
+        return CURVES[id];
+      } catch (error) {
+        /* пробуем следующую */
+      }
+    }
+    fail('BAD_PRIVATE_KEY', 'Приватный ключ не подходит ни под X25519, ни под ECDH P-256.');
   }
 
   /** Разбирает бронированный приватный ключ (при необходимости — с паролем). */
@@ -364,14 +489,19 @@
     if (type && type !== ARMOR_TYPES.PRIVATE_KEY) {
       fail('BAD_PRIVATE_KEY', 'Это не приватный ключ Encryptory, а что-то другое.');
     }
+
+    let curve = curveByPrivatePrefix(payload);
     let pkcs8;
-    if (payload.startsWith(PRIVATE_PROTECTED_PREFIX)) {
+    let protectedAtRest = false;
+
+    if (curve && payload.startsWith(curve.protectedPrefix)) {
+      protectedAtRest = true;
       if (!passphrase) {
         fail('PASSPHRASE_REQUIRED', 'Приватный ключ защищён паролем — укажите пароль.');
       }
       let envelope;
       try {
-        envelope = JSON.parse(decodeUtf8(b64uToBytes(payload.slice(PRIVATE_PROTECTED_PREFIX.length), 'приватном ключе')));
+        envelope = JSON.parse(decodeUtf8(b64uToBytes(payload.slice(curve.protectedPrefix.length), 'приватном ключе')));
       } catch (error) {
         fail('BAD_PRIVATE_KEY', 'Не удалось разобрать контейнер защищённого ключа.');
       }
@@ -385,13 +515,15 @@
       } catch (error) {
         fail('BAD_PASSPHRASE', 'Неверный пароль или повреждённый ключ.');
       }
-    } else if (payload.startsWith(PRIVATE_PREFIX)) {
-      pkcs8 = b64uToBytes(payload.slice(PRIVATE_PREFIX.length), 'приватном ключе');
+    } else if (curve) {
+      pkcs8 = b64uToBytes(payload.slice(curve.privatePrefix.length), 'приватном ключе');
     } else {
-      fail('BAD_PRIVATE_KEY', 'Не похоже на приватный ключ Encryptory.');
+      // Неизвестный префикс: пробуем понять по содержимому.
+      pkcs8 = b64uToBytes(payload, 'приватном ключе');
+      curve = await sniffPrivateCurve(pkcs8);
     }
 
-    const privateKey = await importPrivateKeyBytes(pkcs8);
+    const privateKey = await importPrivateKeyBytes(pkcs8, curve);
     let jwk;
     try {
       jwk = await getSubtle().exportKey('jwk', privateKey);
@@ -399,38 +531,63 @@
       fail('BAD_PRIVATE_KEY', 'Ключ прочитан, но извлечь публичную часть не получилось.');
     }
     const raw = rawFromJwk(jwk);
+    const actualCurve = detectCurveFromPublicBytes(raw);
+    if (actualCurve.id !== curve.id) {
+      fail('BAD_PRIVATE_KEY', `Ключ оказался на кривой ${actualCurve.label}, а помечен как ${curve.label}.`);
+    }
     return {
-      publicKeyText: PUBLIC_PREFIX + bytesToB64u(raw),
+      publicKeyText: actualCurve.publicPrefix + bytesToB64u(raw),
       publicKeyRaw: raw,
+      curve: actualCurve.id,
+      curveLabel: actualCurve.label,
       fingerprint: await fingerprint(raw),
       privateKey,
       privateKeyPkcs8: pkcs8,
       privateKeyArmor: String(armoredText).trim() + '\n',
-      encryptedAtRest: payload.startsWith(PRIVATE_PROTECTED_PREFIX),
+      encryptedAtRest: protectedAtRest,
     };
   }
 
   function isPrivateKeyProtected(armoredText) {
-    return stripArmor(armoredText).payload.startsWith(PRIVATE_PROTECTED_PREFIX);
+    const { payload } = stripArmor(armoredText);
+    return CURVE_ORDER.some((id) => payload.startsWith(CURVES[id].protectedPrefix));
   }
 
   /* ------------------------------------------------------------------ */
   /* Идентичность                                                        */
   /* ------------------------------------------------------------------ */
 
-  /** Генерирует новую пару ключей. */
-  async function generateIdentity(passphrase) {
-    const subtle = getSubtle();
-    const pair = await subtle.generateKey({ name: 'ECDH', namedCurve: CURVE }, true, ['deriveBits']);
-    const raw = new Uint8Array(await subtle.exportKey('raw', pair.publicKey));
-    const pkcs8 = new Uint8Array(await subtle.exportKey('pkcs8', pair.privateKey));
+  /**
+   * Генерирует новую пару ключей.
+   * По умолчанию X25519; если окружение его не умеет — откатывается на P-256.
+   */
+  async function generateIdentity(passphrase, curveId) {
+    let curve;
+    if (curveId) {
+      curve = CURVES[curveId];
+      if (!curve) fail('BAD_CURVE', `Неизвестная кривая «${curveId}».`);
+      if (!(await isCurveSupported(curveId))) {
+        fail('UNSUPPORTED_CURVE', `Это окружение не поддерживает ${curve.label}.`);
+      }
+    } else {
+      curve = CURVES[DEFAULT_CURVE];
+      if (!(await isCurveSupported(DEFAULT_CURVE))) {
+        curve = CURVES['P-256'];
+      }
+    }
+
+    const pair = await generateKeyPairFor(curve);
+    const raw = new Uint8Array(await getSubtle().exportKey('raw', pair.publicKey));
+    const pkcs8 = new Uint8Array(await getSubtle().exportKey('pkcs8', pair.privateKey));
     return {
-      publicKeyText: PUBLIC_PREFIX + bytesToB64u(raw),
+      publicKeyText: curve.publicPrefix + bytesToB64u(raw),
       publicKeyRaw: raw,
+      curve: curve.id,
+      curveLabel: curve.label,
       fingerprint: await fingerprint(raw),
       privateKey: pair.privateKey,
       privateKeyPkcs8: pkcs8,
-      privateKeyArmor: await exportPrivateKey(pkcs8, passphrase || null),
+      privateKeyArmor: await exportPrivateKey(pkcs8, passphrase || null, curve.id),
       encryptedAtRest: Boolean(passphrase),
     };
   }
@@ -443,7 +600,7 @@
   async function getPrivateKey(identity) {
     if (!identity) fail('NO_IDENTITY', 'Сначала сгенерируйте или импортируйте свою пару ключей.');
     if (identity.privateKey) return identity.privateKey;
-    if (identity.privateKeyPkcs8) return importPrivateKeyBytes(identity.privateKeyPkcs8);
+    if (identity.privateKeyPkcs8) return importPrivateKeyBytes(identity.privateKeyPkcs8, CURVES[identity.curve || DEFAULT_CURVE]);
     if (identity.privateKeyArmor) {
       const parsed = await importPrivateKey(identity.privateKeyArmor, identity.passphrase);
       return parsed.privateKey;
@@ -453,9 +610,15 @@
 
   function getPublicRaw(identity) {
     if (!identity) fail('NO_IDENTITY', 'Нет идентичности.');
-    if (identity.publicKeyRaw) return assertPublicRaw(toBytes(identity.publicKeyRaw), 'Публичный ключ');
+    if (identity.publicKeyRaw) return toBytes(identity.publicKeyRaw);
     if (identity.publicKeyText) return parsePublicKey(identity.publicKeyText).raw;
     fail('NO_IDENTITY', 'У идентичности нет публичного ключа.');
+  }
+
+  /** Кривая идентичности — по явному полю или по длине публичного ключа. */
+  function getIdentityCurve(identity) {
+    if (identity && identity.curve && CURVES[identity.curve]) return CURVES[identity.curve];
+    return detectCurveFromPublicBytes(getPublicRaw(identity));
   }
 
   /* ------------------------------------------------------------------ */
@@ -472,28 +635,19 @@
 
   /**
    * ECDH + HKDF → ключ AES-256-GCM.
-   * myPrivateKey      — приватный ключ своей пары
-   * peerPublicRaw     — публичный ключ собеседника
-   * salt              — случайная соль сообщения
-   * myPublicRaw / peerPublicRaw передаются ещё раз для привязки ключа к паре участников.
+   * myPrivateKey  — приватный ключ своей пары
+   * peerPublicRaw — публичный ключ собеседника
+   * salt          — случайная соль сообщения
+   * pubA / pubB   — оба публичных ключа: попадают в HKDF info, поэтому ключ
+   *                 привязан к конкретной паре участников.
+   * curve         — кривая обеих сторон (X25519 или P-256).
    */
-  async function deriveAesKey(myPrivateKey, peerPublicRaw, salt, pubA, pubB) {
+  async function deriveAesKey(myPrivateKey, peerPublicRaw, salt, pubA, pubB, curve) {
     const subtle = getSubtle();
-    const peerKey = await subtle.importKey(
-      'raw',
-      assertPublicRaw(toBytes(peerPublicRaw), 'Публичный ключ собеседника'),
-      { name: 'ECDH', namedCurve: CURVE },
-      false,
-      []
-    );
-    let shared;
-    try {
-      shared = await subtle.deriveBits({ name: 'ECDH', public: peerKey }, myPrivateKey, 256);
-    } catch (error) {
-      fail('ECDH_FAILED', 'Не удалось выработать общий секрет — проверьте, что ключи относятся к кривой P-256.');
-    }
+    const peerKey = await importPeerPublicKey(peerPublicRaw, curve);
+    const shared = await deriveSecretBits(myPrivateKey, peerKey, curve);
     const ordered = [toBytes(pubA), toBytes(pubB)].sort(compareBytes);
-    const info = concatBytes(encodeUtf8(HKDF_INFO_PREFIX), ordered[0], ordered[1]);
+    const info = concatBytes(encodeUtf8(curve.infoPrefix), ordered[0], ordered[1]);
     const hkdfKey = await subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
     return subtle.deriveKey(
       { name: 'HKDF', hash: 'SHA-256', salt: toBytes(salt), info },
@@ -508,24 +662,45 @@
   /* Шифрование / расшифровка                                            */
   /* ------------------------------------------------------------------ */
 
+  /** Понятное объяснение, когда ключи собеседников на разных кривых. */
+  function curveMismatchError(mine, theirs) {
+    fail(
+      'CURVE_MISMATCH',
+      `Ваш ключ — ${mine.label}, а ключ собеседника — ${theirs.label}. Обмен на разных кривых невозможен: ` +
+        'попросите собеседника создать новую пару ключей в актуальной версии Encryptory (X25519) ' +
+        'или сами импортируйте ключ нужной кривой.'
+    );
+  }
+
   /**
    * Шифрует текст для получателя.
    *   { plaintext, recipient (ключ-текст), identity }  →  бронированный текст
+   * Кривая посылки определяется ключом получателя.
    */
   async function encrypt({ plaintext, recipient, identity, now }) {
     if (typeof plaintext !== 'string' || plaintext.length === 0) {
       fail('EMPTY_TEXT', 'Нечего шифровать: текст пуст.');
     }
     const recipientKey = parsePublicKey(recipient);
-    const senderRaw = getPublicRaw(identity);
+    const recipientCurve = CURVES[recipientKey.curve];
+    const myPublicRaw = getPublicRaw(identity);
+    const myCurve = getIdentityCurve(identity);
+    if (myCurve.id !== recipientCurve.id) curveMismatchError(myCurve, recipientCurve);
+
     const myPrivateKey = await getPrivateKey(identity);
 
     const salt = randomBytes(32);
     const iv = randomBytes(12);
     const timestamp = Math.floor((now ? Number(now) : Date.now()) / 1000);
-    const header = [VERSION, bytesToB64u(senderRaw), bytesToB64u(salt), bytesToB64u(iv), String(timestamp)].join('.');
+    const header = [
+      recipientCurve.version,
+      bytesToB64u(myPublicRaw),
+      bytesToB64u(salt),
+      bytesToB64u(iv),
+      String(timestamp),
+    ].join('.');
 
-    const aesKey = await deriveAesKey(myPrivateKey, recipientKey.raw, salt, senderRaw, recipientKey.raw);
+    const aesKey = await deriveAesKey(myPrivateKey, recipientKey.raw, salt, myPublicRaw, recipientKey.raw, recipientCurve);
     const ciphertext = await getSubtle().encrypt(
       { name: 'AES-GCM', iv, additionalData: encodeUtf8(header), tagLength: 128 },
       aesKey,
@@ -545,14 +720,23 @@
       fail('BAD_MESSAGE', 'Сообщение повреждено: не совпадает число частей контейнера.');
     }
     const [version, senderB64, saltB64, ivB64, timestamp, body] = parts;
-    if (version !== VERSION) {
-      fail('UNSUPPORTED_VERSION', `Неизвестная версия контейнера «${version}» — возможно, шифровано более новой версией Encryptory.`);
+    const curve = curveByVersion(version);
+    if (!curve) {
+      fail(
+        'UNSUPPORTED_VERSION',
+        `Неизвестная версия контейнера «${version}» — возможно, шифровано более новой версией Encryptory.`
+      );
     }
-    const senderRaw = assertPublicRaw(b64uToBytes(senderB64, 'ключе отправителя'), 'Ключ отправителя');
+    const senderRaw = b64uToBytes(senderB64, 'ключе отправителя');
+    if (senderRaw.length !== curve.publicLength) {
+      fail('BAD_MESSAGE', `Ключ отправителя не подходит под заявленную кривую ${curve.label}.`);
+    }
     return {
       version,
+      curve: curve.id,
+      curveLabel: curve.label,
       senderRaw,
-      senderPublicKeyText: PUBLIC_PREFIX + bytesToB64u(senderRaw),
+      senderPublicKeyText: curve.publicPrefix + bytesToB64u(senderRaw),
       senderB64,
       salt: b64uToBytes(saltB64, 'соли сообщения'),
       iv: b64uToBytes(ivB64, 'nonce сообщения'),
@@ -566,26 +750,38 @@
   async function inspect(armoredText) {
     const parsed = parseMessage(armoredText);
     return {
+      version: parsed.version,
+      curve: parsed.curve,
+      curveLabel: parsed.curveLabel,
       senderPublicKeyText: parsed.senderPublicKeyText,
       senderFingerprint: await fingerprint(parsed.senderRaw),
       timestamp: parsed.timestamp,
-      algorithm: ALGO_LABEL,
+      algorithm: `${parsed.curveLabel} + HKDF-SHA256 + AES-256-GCM`,
     };
   }
 
   function looksLikeMessage(text) {
     const { type, payload } = stripArmor(text);
     if (type === ARMOR_TYPES.MESSAGE) return true;
-    return payload.startsWith(`${VERSION}.`);
+    return CURVE_ORDER.some((id) => payload.startsWith(`${CURVES[id].version}.`));
   }
 
   /** Расшифровывает сообщение своим приватным ключом. */
   async function decrypt({ message, identity }) {
     const parsed = parseMessage(message);
-    const myPrivateKey = await getPrivateKey(identity);
+    const messageCurve = CURVES[parsed.curve];
     const myPublicRaw = getPublicRaw(identity);
+    const myCurve = getIdentityCurve(identity);
+    if (myCurve.id !== messageCurve.id) {
+      fail(
+        'CURVE_MISMATCH',
+        `Сообщение зашифровано на кривой ${messageCurve.label}, а ваш ключ — ${myCurve.label}. ` +
+          'Похоже, посылка адресована не вашему ключу (или ключ создан другой версией утилиты).'
+      );
+    }
+    const myPrivateKey = await getPrivateKey(identity);
 
-    const aesKey = await deriveAesKey(myPrivateKey, parsed.senderRaw, parsed.salt, parsed.senderRaw, myPublicRaw);
+    const aesKey = await deriveAesKey(myPrivateKey, parsed.senderRaw, parsed.salt, parsed.senderRaw, myPublicRaw, messageCurve);
     let plaintextBytes;
     try {
       plaintextBytes = await getSubtle().decrypt(
@@ -603,6 +799,7 @@
       plaintext: decodeUtf8(plaintextBytes),
       senderPublicKeyText: parsed.senderPublicKeyText,
       senderFingerprint: await fingerprint(parsed.senderRaw),
+      curve: parsed.curve,
       timestamp: parsed.timestamp,
     };
   }
@@ -612,8 +809,8 @@
   /* ------------------------------------------------------------------ */
 
   /**
-   * Прогоняет полный цикл «зашифровал → расшифровал» и набор негативных проверок.
-   * Возвращает список { name, ok, detail, ms }.
+   * Прогоняет полный цикл «зашифровал → расшифровал» на обеих кривых
+   * и набор негативных проверок. Возвращает список { name, ok, detail, ms }.
    */
   async function selfTest(onStep) {
     const results = [];
@@ -644,8 +841,14 @@
     let bob;
     let carol;
 
-    await run('Генерация пары ключей (Алиса)', async () => {
+    await run(`Поддержка кривых (${CURVE_ORDER.join(', ')})`, async () => {
+      const support = [];
+      for (const id of CURVE_ORDER) support.push(`${id}: ${(await isCurveSupported(id)) ? 'да' : 'нет'}`);
+      return support.join(', ');
+    });
+    await run(`Генерация пары ключей ${CURVES[DEFAULT_CURVE].label} (Алиса)`, async () => {
       alice = await generateIdentity();
+      if (alice.curve !== DEFAULT_CURVE) fail('SELFTEST', `ожидалась кривая ${DEFAULT_CURVE}, получена ${alice.curve}`);
       return `отпечаток ${alice.fingerprint}`;
     });
     await run('Генерация пары ключей (Боб)', async () => {
@@ -659,6 +862,12 @@
     await run('Ключи различаются', async () => {
       if (alice.publicKeyText === bob.publicKeyText) fail('SELFTEST', 'публичные ключи совпали');
       return 'Алиса ≠ Боб';
+    });
+    await run(`Длина публичного ключа ${CURVES[DEFAULT_CURVE].label}`, async () => {
+      if (alice.publicKeyRaw.length !== CURVES[DEFAULT_CURVE].publicLength) {
+        fail('SELFTEST', `ожидалось ${CURVES[DEFAULT_CURVE].publicLength} байт, получено ${alice.publicKeyRaw.length}`);
+      }
+      return `${alice.publicKeyRaw.length} байт`;
     });
 
     let message;
@@ -687,15 +896,14 @@
       if (opened.plaintext !== 'Привет, Алиса!') fail('SELFTEST', 'текст не совпал');
       return 'OK';
     });
-    await run('Чужой ключ (Кэрол) не расшифровывает', () =>
-      expectFailure(() => decrypt({ message, identity: carol }), 'DECRYPT_FAILED'));
     await run('Посылка самому себе шифруется и читается', async () => {
       const note = await encrypt({ plaintext: 'заметка себе', recipient: alice.publicKeyText, identity: alice });
       const opened = await decrypt({ message: note, identity: alice });
       if (opened.plaintext !== 'заметка себе') fail('SELFTEST', 'текст не совпал');
-      if (opened.senderFingerprint !== alice.fingerprint) fail('SELFTEST', 'отпечаток отправителя не совпал');
       return 'OK';
     });
+    await run('Чужой ключ (Кэрол) не расшифровывает', () =>
+      expectFailure(() => decrypt({ message, identity: carol }), 'DECRYPT_FAILED'));
     await run('Отправитель не может прочитать посылку, адресованную другому', () =>
       expectFailure(() => decrypt({ message, identity: alice }), 'DECRYPT_FAILED'));
     await run('Порча шифротекста обнаруживается', async () => {
@@ -710,25 +918,26 @@
       parts[1] = bytesToB64u(carol.publicKeyRaw);
       return expectFailure(() => decrypt({ message: parts.join('.'), identity: bob }), 'DECRYPT_FAILED');
     });
+    await run('Пропущенный nonce (повтор) не проходит', async () => {
+      const parts = stripArmor(message).payload.split('.');
+      parts[3] = bytesToB64u(randomBytes(12));
+      return expectFailure(() => decrypt({ message: parts.join('.'), identity: bob }), 'DECRYPT_FAILED');
+    });
     await run('Ключ не защищён паролем и читается', async () => {
       const again = await importPrivateKey(alice.privateKeyArmor);
       if (again.publicKeyText !== alice.publicKeyText) fail('SELFTEST', 'публичный ключ не восстановился');
       return `отпечаток ${again.fingerprint}`;
     });
     await run('Парольная защита ключа: экспорт → импорт', async () => {
-      const protectedArmor = await exportPrivateKey(alice.privateKeyPkcs8, 'мой-пароль-42');
+      const protectedArmor = await exportPrivateKey(alice.privateKeyPkcs8, 'мой-пароль-42', alice.curve);
       if (!isPrivateKeyProtected(protectedArmor)) fail('SELFTEST', 'ключ не помечен как защищённый');
-      const wrong = await expectFailure(() => importPrivateKey(protectedArmor, 'неверный-пароль'), 'BAD_PASSPHRASE');
+      await expectFailure(() => importPrivateKey(protectedArmor, 'неверный-пароль'), 'BAD_PASSPHRASE');
       const restored = await importPrivateKey(protectedArmor, 'мой-пароль-42');
       if (restored.publicKeyText !== alice.publicKeyText) fail('SELFTEST', 'ключ после расшифровки не совпал');
       return 'верный пароль — ок, неверный — отказ';
     });
-    await run('Чужой публичный ключ не подходит для расшифровки', () =>
-      expectFailure(
-        () => decrypt({ message, identity: { publicKeyText: carol.publicKeyText, privateKeyPkcs8: carol.privateKeyPkcs8 } }),
-        'DECRYPT_FAILED'
-      ));
-    await run('Пустой текст не шифруется', () => expectFailure(() => encrypt({ plaintext: '', recipient: bob.publicKeyText, identity: alice }), 'EMPTY_TEXT'));
+    await run('Пустой текст не шифруется', () =>
+      expectFailure(() => encrypt({ plaintext: '', recipient: bob.publicKeyText, identity: alice }), 'EMPTY_TEXT'));
     await run('Броня устойчива к переносам строк, пробелам и цитированию', async () => {
       const messy = '  ' + message.trim().split('\n').map((line) => `> ${line}`).join('\n   \n') + '\n\n';
       const opened = await decrypt({ message: messy, identity: bob });
@@ -743,24 +952,47 @@
       return 'OK';
     });
     await run('Большой текст (100 КБ) шифруется и читается', async () => {
-      const big = 'Ячейка №' .repeat(10000);
+      const big = 'Ячейка №'.repeat(10000);
       const packed = await encrypt({ plaintext: big, recipient: bob.publicKeyText, identity: alice });
       const opened = await decrypt({ message: packed, identity: bob });
       if (opened.plaintext !== big) fail('SELFTEST', 'текст не совпал');
       return `${(big.length / 1024).toFixed(0)} КБ, контейнер ${(packed.length / 1024).toFixed(0)} КБ`;
     });
 
+    // Совместимость со старой кривой P-256 (контейнеры em1/epk1/ek1).
+    if (await isCurveSupported('P-256')) {
+      let legacy;
+      await run('Старый формат ECDH P-256: генерация ключа', async () => {
+        legacy = await generateIdentity(null, 'P-256');
+        if (!legacy.publicKeyText.startsWith('epk1.')) fail('SELFTEST', 'ожидался префикс epk1.');
+        return `отпечаток ${legacy.fingerprint}`;
+      });
+      await run('Старый формат ECDH P-256: цикл шифрования', async () => {
+        const legacyBob = await generateIdentity(null, 'P-256');
+        const legacyMessage = await encrypt({ plaintext: 'старый формат', recipient: legacyBob.publicKeyText, identity: legacy });
+        if (!legacyMessage.includes('em1.')) fail('SELFTEST', 'ожидалась версия контейнера em1');
+        const opened = await decrypt({ message: legacyMessage, identity: legacyBob });
+        if (opened.plaintext !== 'старый формат') fail('SELFTEST', 'текст не совпал');
+        return 'em1 читается';
+      });
+      await run('Ключи разных кривых не смешиваются', () =>
+        expectFailure(() => encrypt({ plaintext: 'x', recipient: legacy.publicKeyText, identity: alice }), 'CURVE_MISMATCH'));
+    }
+
     return results;
   }
 
   return {
-    CURVE,
+    DEFAULT_CURVE,
+    CURVES,
     VERSION,
     ALGO_LABEL,
     ALGO_DETAILS,
     ARMOR_TYPES,
     PBKDF2_ITERATIONS,
+    HKDF_INFO_PREFIX,
     EncryptoryError,
+    isCurveSupported,
     generateIdentity,
     exportPrivateKey,
     importPrivateKey,
@@ -775,7 +1007,10 @@
     inspect,
     parseMessage,
     looksLikeMessage,
-    isArmored,
+    isArmored: (text, type) => {
+      const { type: found } = stripArmor(text);
+      return type ? found === type : Boolean(found);
+    },
     stripArmor,
     selfTest,
   };

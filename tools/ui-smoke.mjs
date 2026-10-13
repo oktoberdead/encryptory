@@ -79,6 +79,8 @@ click(alice, '#save-peer-btn');
 type(bob, '#peer-input', alicePub);
 click(bob, '#save-peer-btn');
 await wait(80);
+const fp = (w) => text(w, '#own-fp').split(' · ').pop();
+check('в чипах показана кривая', text(alice, '#own-fp').startsWith('X25519 · '), text(alice, '#own-fp'));
 check('Алиса видит отпечаток Боба', text(alice, '#peer-fp') === text(bob, '#own-fp'), text(alice, '#peer-fp'));
 check('Боб видит отпечаток Алисы', text(bob, '#peer-fp') === text(alice, '#own-fp'), text(bob, '#peer-fp'));
 check('статус «Готово к работе»', text(alice, '#key-status') === 'Готово к работе');
@@ -108,7 +110,7 @@ type(bob, '#ciphertext', cipher);
 click(bob, '#decrypt-btn');
 await wait(150);
 check('Боб прочитал ровно то, что отправлено', text(bob, '#dec-out') === secret);
-check('Боб видит отпечаток отправителя', text(bob, '#dec-meta').includes(text(bob, '#peer-fp')));
+check('Боб видит отпечаток отправителя', text(bob, '#dec-meta').includes(fp(alice)));
 
 // 5. Боб отвечает (кнопкой) и Алиса читает
 type(bob, '#plaintext', 'принято, буду в 21:00');

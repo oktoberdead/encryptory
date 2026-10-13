@@ -121,7 +121,7 @@ async function cmdKeygen() {
   writeFileSync(publicPath, `${core.publicKeyArmor(identity.publicKeyText).trim()}\n`, 'utf8');
 
   process.stdout.write([
-    `Пара ключей создана.`,
+    `Пара ключей создана (${identity.curveLabel}).`,
     `Отпечаток:   ${identity.fingerprint}`,
     `Публичный:   ${publicPath}  ← этот файл можно отдавать`,
     `Приватный:   ${privatePath}${identity.encryptedAtRest ? '  (защищён паролем)' : '  ← никому не передавайте'}`,
@@ -146,7 +146,8 @@ async function cmdDecrypt() {
   const opened = await core.decrypt({ message: text, identity });
   process.stderr.write(
     `Отправитель: ${opened.senderFingerprint}` +
-    (opened.timestamp ? `, время: ${new Date(opened.timestamp).toISOString()}` : '') + '\n'
+    (opened.timestamp ? `, время: ${new Date(opened.timestamp).toISOString()}` : '') +
+    ` [${core.CURVES[opened.curve].label}]\n`
   );
   outputText(opened.plaintext, 'plaintext');
 }
@@ -156,6 +157,7 @@ async function cmdInspect() {
   const info = await core.inspect(text);
   process.stdout.write([
     `Отправитель:   ${info.senderFingerprint}`,
+    `Кривая:        ${info.curveLabel} (${info.version})`,
     `Ключ:          ${info.senderPublicKeyText}`,
     `Время сборки:  ${info.timestamp ? new Date(info.timestamp).toISOString() : 'не указано'}`,
     `Алгоритм:      ${info.algorithm}`,

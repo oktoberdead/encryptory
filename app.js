@@ -208,7 +208,8 @@
 
     if (identity) {
       $('#own-fp').hidden = false;
-      $('#own-fp').textContent = identity.fingerprint;
+      $('#own-fp').textContent = `${identity.curveLabel} · ${identity.fingerprint}`;
+      $('#own-fp').title = `Кривая ключа: ${identity.curveLabel}. Отпечаток сверяется с собеседником.`;
       $('#own-pub').value = core.publicKeyArmor(identity.publicKeyText).trim();
       $('#own-priv').value = identity.privateKeyArmor || state.ownArmor || '';
       $('#priv-hint').textContent = identity.encryptedAtRest
@@ -224,7 +225,8 @@
     const peer = state.peer;
     $('#peer-fp').hidden = !peer;
     if (peer) {
-      $('#peer-fp').textContent = peer.fingerprint;
+      $('#peer-fp').textContent = `${peer.curveLabel} · ${peer.fingerprint}`;
+      $('#peer-fp').title = `Кривая ключа собеседника: ${peer.curveLabel}`;
       $('#peer-card').classList.add('is-set');
     } else {
       $('#peer-card').classList.remove('is-set');
@@ -347,8 +349,18 @@
         toast('Это ваш собственный публичный ключ. Нужен ключ собеседника.', 'warn');
         return;
       }
+      if (state.identity && parsed.curve !== state.identity.curve) {
+        toast(
+          `Ключ собеседника на кривой ${parsed.curveLabel}, а ваш — ${state.identity.curveLabel}. ` +
+          'Обмен между разными кривыми невозможен: попросите собеседника создать новую пару ключей ' +
+          'в актуальной версии или импортируйте свой ключ нужной кривой.',
+          'err',
+          12000
+        );
+        return;
+      }
       const fp = await core.fingerprint(parsed.raw);
-      state.peer = { text: parsed.text, fingerprint: fp };
+      state.peer = { text: parsed.text, fingerprint: fp, curve: parsed.curve, curveLabel: parsed.curveLabel };
       state.peerText = parsed.text;
       $('#peer-input').value = core.publicKeyArmor(parsed.text).trim();
       saveSession();
@@ -459,7 +471,7 @@
       steps.push({ name: 'Самому себе: зашифровать и прочитать своим ключом', ok: selfOpened.plaintext === plaintext });
 
       // 2. Посылка временному «двойнику»: это уже настоящий обмен между разными ключами.
-      const twin = await core.generateIdentity();
+      const twin = await core.generateIdentity(null, state.identity.curve); // «двойник» на той же кривой
       const toTwin = await core.encrypt({ plaintext, recipient: twin.publicKeyText, identity: state.identity });
       const twinOpened = await core.decrypt({ message: toTwin, identity: twin });
       steps.push({ name: 'Двойнику: зашифровать одним ключом и прочитать другим', ok: twinOpened.plaintext === plaintext });
@@ -779,7 +791,12 @@
     if (saved.peer) {
       try {
         const parsed = core.parsePublicKey(saved.peer);
-        state.peer = { text: parsed.text, fingerprint: await core.fingerprint(parsed.raw) };
+        state.peer = {
+          text: parsed.text,
+          fingerprint: await core.fingerprint(parsed.raw),
+          curve: parsed.curve,
+          curveLabel: parsed.curveLabel,
+        };
         state.peerText = parsed.text;
         $('#peer-input').value = core.publicKeyArmor(parsed.text).trim();
       } catch (error) {
