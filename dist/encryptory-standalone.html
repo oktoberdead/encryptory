@@ -1,0 +1,2472 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Encryptory — шифрование текста между двумя людьми</title>
+<meta name="description" content="Мини-приложение: шифрует текст для конкретного человека. Ключи генерируются и обмениваются локально, шифрование целиком в браузере.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0f17">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%20width%3D%2264%22%20height%3D%2264%22%3E%0A%20%20%3Cdefs%3E%0A%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%236ea8fe%22%2F%3E%0A%20%20%20%20%20%20%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23a78bfa%22%2F%3E%0A%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%3C%2Fdefs%3E%0A%20%20%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22%230b0f17%22%2F%3E%0A%20%20%3Crect%20x%3D%2216%22%20y%3D%2228%22%20width%3D%2232%22%20height%3D%2224%22%20rx%3D%226%22%20fill%3D%22url(%23g)%22%2F%3E%0A%20%20%3Cpath%20d%3D%22M24%2028v-6a8%208%200%200%201%2016%200v6%22%20fill%3D%22none%22%20stroke%3D%22url(%23g)%22%20stroke-width%3D%225%22%20stroke-linecap%3D%22round%22%2F%3E%0A%20%20%3Ccircle%20cx%3D%2232%22%20cy%3D%2239%22%20r%3D%223.4%22%20fill%3D%22%230b0f17%22%2F%3E%0A%20%20%3Crect%20x%3D%2230.6%22%20y%3D%2239%22%20width%3D%222.8%22%20height%3D%227%22%20rx%3D%221.4%22%20fill%3D%22%230b0f17%22%2F%3E%0A%3C%2Fsvg%3E">
+<style>
+/* Encryptory — оформление. Без внешних зависимостей и веб-шрифтов. */
+
+:root {
+  --bg: #0b0f17;
+  --panel: rgba(255, 255, 255, 0.045);
+  --panel-strong: rgba(255, 255, 255, 0.07);
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text: #e8edf7;
+  --muted: #94a3b8;
+  --accent: #6ea8fe;
+  --accent-2: #a78bfa;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --radius: 16px;
+  --radius-sm: 10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+.bg-glow {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(900px 500px at 12% -8%, rgba(110, 168, 254, 0.18), transparent 60%),
+    radial-gradient(800px 500px at 92% 4%, rgba(167, 139, 250, 0.16), transparent 62%),
+    radial-gradient(700px 500px at 50% 110%, rgba(52, 211, 153, 0.09), transparent 60%);
+}
+
+/* ---------------------------------------------------------------- шапка */
+
+.topbar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 18px clamp(16px, 4vw, 40px);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+}
+
+.brand { display: flex; align-items: center; gap: 12px; }
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  color: #0b0f17;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 8px 24px rgba(110, 168, 254, 0.35);
+}
+
+.brand-text { display: flex; flex-direction: column; line-height: 1.25; }
+.brand-text strong { font-size: 17px; letter-spacing: 0.2px; }
+.brand-text small { color: var(--muted); font-size: 11.5px; font-family: var(--mono); }
+
+.topbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---------------------------------------------------------------- каркас */
+
+.layout {
+  position: relative;
+  z-index: 1;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px clamp(16px, 4vw, 40px) 48px;
+  display: grid;
+  gap: 18px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  backdrop-filter: blur(10px);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.panel h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.step {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0b0f17;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+
+.keys-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.key-card {
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.key-card.is-set { border-color: rgba(52, 211, 153, 0.35); background: rgba(52, 211, 153, 0.045); }
+
+.key-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.key-card h3 { margin: 0; font-size: 14px; font-weight: 600; }
+
+.workspace {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+/* ---------------------------------------------------------------- текст */
+
+.field { display: grid; gap: 6px; }
+
+.label {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.hint { margin: 0; color: var(--muted); font-size: 13px; }
+.muted { color: var(--muted); }
+.ok-text { color: var(--ok); }
+.warn-text { color: var(--warn); }
+.danger-text { color: var(--danger); }
+.meta { color: var(--muted); font-size: 12.5px; font-family: var(--mono); align-self: center; }
+.spacer { flex: 1 1 auto; }
+
+textarea,
+input[type="password"],
+input[type="text"] {
+  width: 100%;
+  padding: 11px 13px;
+  color: var(--text);
+  background: rgba(6, 10, 18, 0.55);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: 14.5px/1.5 var(--sans);
+  resize: vertical;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+textarea { min-height: 90px; }
+
+textarea:focus,
+input:focus {
+  outline: none;
+  border-color: rgba(110, 168, 254, 0.65);
+  box-shadow: 0 0 0 3px rgba(110, 168, 254, 0.16);
+}
+
+textarea[readonly] { background: rgba(6, 10, 18, 0.8); }
+
+.mono { font-family: var(--mono); font-size: 12.8px; letter-spacing: 0.02em; }
+
+.key-box { min-height: 84px; }
+.priv-box { border-color: rgba(248, 113, 113, 0.35); }
+
+::placeholder { color: #55637a; }
+
+/* ---------------------------------------------------------------- кнопки */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--panel-strong);
+  color: var(--text);
+  font: 600 13.5px/1 var(--sans);
+  cursor: pointer;
+  transition: transform 0.08s, background 0.15s, border-color 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.26); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.btn-primary {
+  border-color: transparent;
+  color: #08101f;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 6px 18px rgba(110, 168, 254, 0.22);
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.07); background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+
+.btn-ghost { background: transparent; }
+.btn-danger { color: var(--danger); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.08); }
+.btn-danger:hover:not(:disabled) { background: rgba(248, 113, 113, 0.16); }
+.btn-sm { padding: 6px 11px; font-size: 12.5px; }
+
+.icon-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.icon-btn:hover { color: var(--text); border-color: var(--border-strong); }
+
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.row-tight { margin-top: 6px; gap: 8px; }
+
+.checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.checkbox input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent); }
+.checkbox em { color: var(--muted); font-style: normal; font-size: 12.5px; }
+
+.hidden { display: none !important; }
+
+/* ---------------------------------------------------------------- чипы и бейджи */
+
+.chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+}
+.chip[data-state="ok"] { color: var(--ok); border-color: rgba(52, 211, 153, 0.4); background: rgba(52, 211, 153, 0.1); }
+.chip[data-state="warn"] { color: var(--warn); border-color: rgba(251, 191, 36, 0.38); background: rgba(251, 191, 36, 0.1); }
+.chip[data-state="err"] { color: var(--danger); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1); }
+
+.fp {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  color: var(--accent);
+  background: rgba(110, 168, 254, 0.1);
+  border: 1px solid rgba(110, 168, 254, 0.3);
+}
+
+.badge-ok {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ok);
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+}
+.badge-err {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--danger);
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+}
+
+/* ---------------------------------------------------------------- вывода */
+
+.output-block, .local-check, .error-box {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.022);
+  display: grid;
+  gap: 8px;
+}
+
+.local-check { border-color: rgba(52, 211, 153, 0.3); }
+.local-check.mismatch { border-color: rgba(248, 113, 113, 0.45); }
+
+.error-box {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.08);
+  color: #ffd9d9;
+  font-size: 13.5px;
+}
+
+.output-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.output-head .label { margin: 0; }
+.output-head em { font-style: normal; text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+.hint-sm { margin-top: 10px; font-size: 12.5px; }
+
+.check-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; font-size: 13px; }
+.check-list li { display: grid; grid-template-columns: 18px 1fr; gap: 6px; align-items: baseline; }
+.check-list .mark { color: var(--ok); font-weight: 700; }
+.check-list li.fail { color: #ffd9d9; }
+.check-list li.fail .mark { color: var(--danger); }
+
+.local-details { margin-top: 4px; }
+.local-details summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
+.local-details .hint { margin: 8px 0 6px; font-size: 12.5px; }
+
+.own-private {
+  margin-top: 10px;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(248, 113, 113, 0.05);
+  padding: 10px 12px;
+}
+.own-private summary { cursor: pointer; font-size: 13.5px; font-weight: 600; }
+.own-private[open] summary { margin-bottom: 8px; }
+
+/* ---------------------------------------------------------------- заметки */
+
+.notes-panel h2 { margin-bottom: 14px; }
+
+.notes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 14px;
+}
+
+.note h3 { margin: 0 0 6px; font-size: 13.5px; color: var(--accent); }
+.note p { margin: 0; font-size: 13px; color: var(--muted); }
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12.5px;
+  padding: 4px 2px;
+}
+.footer-links { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.link { color: var(--accent); text-decoration: none; border-bottom: 1px dashed rgba(110, 168, 254, 0.45); }
+.link:hover { color: #a9c9ff; }
+.dot { opacity: 0.5; }
+
+/* ---------------------------------------------------------------- диалоги */
+
+dialog {
+  border: none;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  max-width: min(760px, calc(100vw - 32px));
+  width: 100%;
+}
+dialog::backdrop { background: rgba(4, 7, 13, 0.72); backdrop-filter: blur(3px); }
+
+.dialog-body {
+  background: #101627;
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  max-height: min(86vh, 900px);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+}
+.dialog-body.wide { max-width: 860px; }
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.dialog-head h2 { margin: 0; font-size: 16px; }
+
+.dialog-content { padding: 16px 18px; overflow: auto; display: grid; gap: 12px; }
+.dialog-content h3 { margin: 8px 0 0; font-size: 14px; }
+.dialog-content p { margin: 0; font-size: 13.5px; }
+.dialog-content code {
+  font-family: var(--mono);
+  font-size: 12.3px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1.5px 5px;
+  border-radius: 5px;
+}
+.dialog-content ul { margin: 0; padding-left: 18px; font-size: 13.5px; display: grid; gap: 5px; }
+.dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.steps { margin: 0; padding-left: 20px; display: grid; gap: 8px; font-size: 13.5px; }
+.steps strong { color: var(--accent); }
+
+/* ---------------------------------------------------------------- самопроверка */
+
+.summary { font-size: 13.5px; color: var(--muted); }
+
+.test-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.test-list li {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+}
+.test-list li.pass .mark { color: var(--ok); }
+.test-list li.fail { border-color: rgba(248, 113, 113, 0.45); background: rgba(248, 113, 113, 0.08); }
+.test-list li.fail .mark { color: var(--danger); }
+.test-list li.running .mark { color: var(--warn); }
+.test-list .mark { font-weight: 700; }
+.test-list .detail { color: var(--muted); font-size: 12.3px; font-family: var(--mono); }
+.test-list .ms { color: var(--muted); font-size: 11.5px; font-family: var(--mono); }
+
+/* ---------------------------------------------------------------- тосты */
+
+.toasts {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 50;
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  max-width: min(420px, calc(100vw - 36px));
+  padding: 11px 14px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  background: #16203a;
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  animation: toast-in 0.16s ease-out;
+}
+.toast.ok { border-color: rgba(52, 211, 153, 0.45); }
+.toast.err { border-color: rgba(248, 113, 113, 0.5); }
+.toast.warn { border-color: rgba(251, 191, 36, 0.45); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---------------------------------------------------------------- мелочи */
+
+@media (max-width: 640px) {
+  .layout { padding: 16px 12px 36px; }
+  .panel { padding: 14px; }
+  .topbar { padding: 14px 12px; }
+  .brand-text small { display: none; }
+  .toasts { left: 12px; right: 12px; justify-items: stretch; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="bg-glow" aria-hidden="true"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="10.5" width="16" height="10" rx="2.5"></rect>
+        <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path>
+        <circle cx="12" cy="15.5" r="1.3" fill="currentColor" stroke="none"></circle>
+      </svg>
+    </span>
+    <span class="brand-text">
+      <strong>Encryptory</strong>
+      <small id="algo-label">ECDH P-256 → HKDF-SHA256 → AES-256-GCM</small>
+    </span>
+  </div>
+  <div class="topbar-actions">
+    <button type="button" class="btn btn-ghost" id="self-test-btn">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>
+      Самопроверка
+    </button>
+    <button type="button" class="btn btn-ghost" id="help-btn" aria-haspopup="dialog">Как это работает</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ============================ КЛЮЧИ ============================ -->
+  <section class="panel keys-panel" aria-labelledby="keys-title">
+    <div class="panel-head">
+      <h2 id="keys-title"><span class="step">1</span> Ключи</h2>
+      <span class="chip" id="key-status" data-state="warn">Ключей пока нет</span>
+    </div>
+
+    <div class="keys-grid">
+
+      <!-- Мой ключ -->
+      <div class="key-card" id="own-card">
+        <div class="key-card-head">
+          <h3>Моя пара ключей</h3>
+          <span class="fp" id="own-fp" hidden></span>
+        </div>
+
+        <div id="own-empty">
+          <p class="hint">
+            Приватный ключ остаётся у вас, публичный — можно отдавать кому угодно.
+            Собеседнику нужен именно публичный.
+          </p>
+          <label class="checkbox">
+            <input type="checkbox" id="protect-toggle">
+            <span>Защитить приватный ключ паролем <em>(нужен будет при каждом открытии страницы)</em></span>
+          </label>
+          <div class="field hidden" id="protect-field">
+            <input type="password" id="protect-pass" placeholder="Пароль для приватного ключа" autocomplete="new-password">
+          </div>
+          <div class="row">
+            <button type="button" class="btn btn-primary" id="generate-btn">Создать мою пару ключей</button>
+            <button type="button" class="btn" id="import-own-btn">Импортировать ключ</button>
+          </div>
+        </div>
+
+        <div id="own-ready" hidden>
+          <p class="label">Мой публичный ключ — передайте его собеседнику</p>
+          <textarea class="mono key-box" id="own-pub" readonly rows="4" spellcheck="false" aria-label="Мой публичный ключ"></textarea>
+          <div class="row row-tight">
+            <button type="button" class="btn btn-sm" data-copy="#own-pub">Копировать</button>
+            <button type="button" class="btn btn-sm" id="download-pub-btn">Скачать файлом</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-select="#own-pub">Выделить всё</button>
+          </div>
+
+          <details class="own-private">
+            <summary>Приватный ключ <span class="warn-text">— никому не передавайте</span></summary>
+            <div class="row row-tight">
+              <button type="button" class="btn btn-sm btn-danger" id="download-priv-btn">Скачать приватный ключ</button>
+              <button type="button" class="btn btn-sm" id="show-priv-btn">Показать</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-copy="#own-priv">Копировать</button>
+            </div>
+            <textarea class="mono key-box priv-box hidden" id="own-priv" readonly rows="4" spellcheck="false" aria-label="Мой приватный ключ"></textarea>
+            <p class="hint" id="priv-hint"></p>
+          </details>
+
+          <div class="row row-tight">
+            <button type="button" class="btn btn-sm btn-ghost" id="reset-own-btn">Сбросить и создать новую пару</button>
+          </div>
+        </div>
+
+        <div id="own-locked" hidden>
+          <p class="hint">Приватный ключ защищён паролем. Введите пароль, чтобы разблокировать его в этой вкладке.</p>
+          <div class="field row-tight">
+            <input type="password" id="unlock-pass" placeholder="Пароль" autocomplete="current-password">
+            <button type="button" class="btn" id="unlock-btn">Разблокировать</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ключ собеседника -->
+      <div class="key-card" id="peer-card">
+        <div class="key-card-head">
+          <h3>Ключ собеседника</h3>
+          <span class="fp" id="peer-fp" hidden></span>
+        </div>
+        <p class="hint">Вставьте публичный ключ, который вам прислали. Лучше — сверьте отпечаток голосом.</p>
+        <textarea class="mono key-box" id="peer-input" rows="4" spellcheck="false" placeholder="-----BEGIN ENCRYPTORY PUBLIC KEY-----&#10;epk1.…&#10;-----END ENCRYPTORY PUBLIC KEY-----" aria-label="Публичный ключ собеседника"></textarea>
+        <div class="row row-tight">
+          <button type="button" class="btn btn-primary btn-sm" id="save-peer-btn">Сохранить ключ</button>
+          <button type="button" class="btn btn-sm" id="import-peer-btn">Из файла</button>
+          <button type="button" class="btn btn-sm btn-ghost" id="clear-peer-btn">Очистить</button>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ========================== РАБОЧАЯ ЗОНА ========================== -->
+  <div class="workspace">
+
+    <!-- Шифрование -->
+    <section class="panel" aria-labelledby="enc-title">
+      <div class="panel-head">
+        <h2 id="enc-title"><span class="step">2</span> Зашифровать</h2>
+        <span class="chip" id="enc-chip">нужен ключ собеседника</span>
+      </div>
+
+      <label class="label" for="plaintext">Текст, который нужно спрятать</label>
+      <textarea id="plaintext" rows="7" placeholder="Введите текст… (всё остаётся в браузере)" spellcheck="false"></textarea>
+
+      <div class="row">
+        <button type="button" class="btn btn-primary" id="encrypt-btn" disabled>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path></svg>
+          Зашифровать для собеседника
+        </button>
+        <button type="button" class="btn" id="self-check-btn" disabled title="Шифрует текст и тут же расшифровывает его на этой машине — чтобы убедиться, что всё работает">
+          Локальная проверка
+        </button>
+        <span class="spacer"></span>
+        <span class="meta" id="enc-meta"></span>
+      </div>
+      <p class="hint hint-sm" id="self-check-hint">
+        «Локальная проверка» шифрует текст дважды — самому себе и временному локальному «двойнику» — и тут же расшифровывает обе посылки,
+        сравнивая результат с исходным текстом. Приватный ключ собеседника для этого не нужен (его у вас и нет): проверка доказывает,
+        что шифрование на этой машине работает и «каша» превращается обратно в текст.
+      </p>
+
+      <div class="output-block" id="enc-out-block" hidden>
+        <div class="output-head">
+          <span class="label">Шифротекст — отдайте его собеседнику</span>
+          <div class="row row-tight">
+            <button type="button" class="btn btn-sm" data-copy="#enc-out">Копировать</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-select="#enc-out">Выделить всё</button>
+          </div>
+        </div>
+        <textarea class="mono" id="enc-out" readonly rows="6" spellcheck="false" aria-label="Шифротекст"></textarea>
+      </div>
+
+      <div class="local-check" id="local-check" hidden>
+        <div class="output-head">
+          <span class="label ok-text">Результат локальной расшифровки <em>(должен совпасть с исходным текстом)</em></span>
+          <span class="badge-ok" id="local-verdict"></span>
+        </div>
+        <ul class="check-list" id="local-steps"></ul>
+        <textarea id="local-out" readonly rows="4" spellcheck="false" aria-label="Результат локальной расшифровки"></textarea>
+        <details class="local-details">
+          <summary>Показать проверочный шифротекст</summary>
+          <p class="hint">Он создан для временного двойника, который жил только в этой вкладке и уже уничтожен. Отправлять его никому не нужно.</p>
+          <textarea class="mono" id="local-ct" readonly rows="4" spellcheck="false" aria-label="Проверочный шифротекст"></textarea>
+          <div class="row row-tight">
+            <button type="button" class="btn btn-sm" data-copy="#local-ct">Копировать</button>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <!-- Расшифровка -->
+    <section class="panel" aria-labelledby="dec-title">
+      <div class="panel-head">
+        <h2 id="dec-title"><span class="step">3</span> Расшифровать</h2>
+        <span class="chip" id="dec-chip">нужен мой приватный ключ</span>
+      </div>
+
+      <label class="label" for="ciphertext">Шифротекст, который вам прислали</label>
+      <textarea class="mono" id="ciphertext" rows="7" spellcheck="false" placeholder="-----BEGIN ENCRYPTORY MESSAGE-----&#10;em1.…&#10;-----END ENCRYPTORY MESSAGE-----" aria-label="Шифротекст для расшифровки"></textarea>
+
+      <div class="row">
+        <button type="button" class="btn btn-primary" id="decrypt-btn" disabled>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 7.4-2"></path></svg>
+          Расшифровать
+        </button>
+        <button type="button" class="btn" id="paste-btn">Вставить из буфера</button>
+        <button type="button" class="btn btn-ghost" id="clear-in-btn">Очистить</button>
+        <span class="spacer"></span>
+        <span class="meta" id="dec-meta"></span>
+      </div>
+
+      <div class="output-block" id="dec-out-block" hidden>
+        <div class="output-head">
+          <span class="label">Расшифрованный текст</span>
+          <div class="row row-tight">
+            <button type="button" class="btn btn-sm" data-copy="#dec-out">Копировать</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-select="#dec-out">Выделить всё</button>
+            <button type="button" class="btn btn-sm btn-ghost" id="clear-out-btn">Очистить</button>
+          </div>
+        </div>
+        <textarea id="dec-out" readonly rows="6" spellcheck="false" aria-label="Расшифрованный текст"></textarea>
+      </div>
+    </section>
+
+  </div>
+
+  <section class="panel notes-panel">
+    <h2><span class="step">i</span> Что стоит помнить</h2>
+    <div class="notes-grid">
+      <div class="note">
+        <h3>Обмен ключами — только лично</h3>
+        <p>Публичный ключ собеседника надёжнее получить лично или по другому каналу и сверить отпечаток. Если подменить ключ, собеседник получит «кашу на имя чужого человека» — расшифровать он не сможет, а злоумышленник сможет.</p>
+      </div>
+      <div class="note">
+        <h3>Канал связи не важен</h3>
+        <p>Шифротекст можно отправлять хоть в открытом чате. Секрет не даёт ничего, кто им не имеет вашего приватного ключа.</p>
+      </div>
+      <div class="note">
+        <h3>Подделка не пройдёт молча</h3>
+        <p>AES-256-GCM проверяет целостность: если шифротекст испортили в пути или ключ не тот — вы увидите ошибку, а не «мусор» на выходе.</p>
+      </div>
+      <div class="note">
+        <h3>Приватный ключ — это вы</h3>
+        <p>Потеряли ключ — старые послания не прочитать. Утёк приватный ключ — собеседники больше не в безопасности. Держите его отдельным файлом.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <span>Шифрование происходит целиком в вашем браузере: на сервер не уходит ни текст, ни ключи (их тут и нет).</span>
+    <span class="footer-links">
+      <a href="https://developer.mozilla.org/ru/docs/Web/API/Web_Crypto_API" class="link" target="_blank" rel="noreferrer noopener">WebCrypto API</a>
+    </span>
+  </footer>
+</main>
+
+<!-- ============================ Диалоги ============================ -->
+<dialog id="help-dialog">
+  <article class="dialog-body">
+    <header class="dialog-head">
+      <h2>Как этим пользоваться</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </header>
+    <div class="dialog-content">
+      <ol class="steps">
+        <li><strong>Каждый создаёт свою пару ключей</strong> у себя на странице. Приватный ключ остаётся у хозяина, публичный можно отдавать всем.</li>
+        <li><strong>Обменяйтесь публичными ключами</strong> локально: лично по AirDrop/флешке/QR или через любой канал, но обязательно сверьте <em>отпечаток</em> — короткую строку вроде <code>K3PQ-7V2M-…</code> — голосом или глазами.</li>
+        <li><strong>Отправитель</strong> вставляет ключ собеседника, пишет текст и жмёт «Зашифровать». Получается бронированный текст — его можно отправлять хоть в открытый мессенджер.</li>
+        <li><strong>Получатель</strong> вставляет шифротекст, жмёт «Расшифровать» — и читает исходный текст. Свой ключ при этом никуда не отправляется.</li>
+      </ol>
+
+      <h3>«Локальная проверка»</h3>
+      <p class="muted">
+        Шифрует текст дважды — самому себе и временному локальному «двойнику» — и тут же расшифровывает обе посылки,
+        сравнивая результат с исходным текстом. Ещё две проверки: посторонний ключ не должен прочитать посылку, и исходный текст
+        не должен угадываться в шифротексте. Так можно убедиться, что на этой машине всё работает.
+      </p>
+      <p class="muted">
+        Свою посылку собеседнику расшифровать локально нельзя — для этого нужен его приватный ключ, а он есть только у него.
+        Это не ограничение утилиты, а суть асимметричного шифрования: читать может только адресат.
+      </p>
+
+      <h3>Что под капотом</h3>
+      <p class="muted">
+        У каждого участника пара ключей ECDH P-256. Стороны обмениваются <em>публичными</em> ключами. Затем:
+        мой приватный × его публичный = общий секрет, одинаковый у обоих. Из секрета через HKDF-SHA256
+        выводится одноразовый ключ AES-256-GCM, и уже им шифруется текст. Приватные ключи не покидают устройство
+        и нигде не публикуются — схема асимметричная, общий пароль не нужен.
+      </p>
+
+      <h3>Формат контейнера</h3>
+      <p class="muted">
+        <code>em1.&lt;ключ отправителя&gt;.&lt;соль&gt;.&lt;nonce&gt;.&lt;время&gt;.&lt;шифротекст&gt;</code> в броне
+        <code>-----BEGIN ENCRYPTORY MESSAGE-----</code>. Переносы строк и лишние пробелы при вставке не мешают.
+      </p>
+
+      <h3>Ограничения</h3>
+      <ul class="muted">
+        <li>Это инструмент для текста, а не мессенджер: переписка и метаданные никуда не прячутся.</li>
+        <li>Ключ отправителя виден в контейнере — получатель может сверить отпечаток отправителя и убедиться, что сообщение пришло от него.</li>
+        <li>Защита приватного ключа паролем — это PBKDF2-SHA256 (310 000 итераций) + AES-256-GCM. Пароль лучше выбирать длинный.</li>
+      </ul>
+    </div>
+    <footer class="dialog-foot">
+      <button type="button" class="btn btn-primary" data-close>Понятно</button>
+    </footer>
+  </article>
+</dialog>
+
+<dialog id="test-dialog">
+  <article class="dialog-body wide">
+    <header class="dialog-head">
+      <h2>Самопроверка на этом устройстве</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </header>
+    <div class="dialog-content">
+      <p class="muted">Сейчас в этой вкладке будут сгенерированы три пары ключей, зашифровано и расшифровано несколько сообщений, а также проверено, что подделка и чужой ключ дают отказ. Ничего не сохраняется.</p>
+      <div class="summary" id="test-summary"></div>
+      <ol class="test-list" id="test-list"></ol>
+    </div>
+    <footer class="dialog-foot">
+      <button type="button" class="btn btn-primary" id="run-test-btn">Запустить проверки</button>
+      <button type="button" class="btn" data-close>Закрыть</button>
+    </footer>
+  </article>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+<input type="file" id="file-input" accept=".txt,.key,.pub,text/plain" hidden>
+
+<noscript>
+  <p style="padding:16px">Для работы Encryptory нужен JavaScript — всё шифрование выполняется в браузере.</p>
+</noscript>
+
+<script>
+/*
+ * Encryptory core — асимметричное шифрование текста.
+ *
+ * Схема (гибридная, на двух парах ключей):
+ *  1. У каждого участника своя пара ключей ECDH P-256 (публичный + приватный).
+ *  2. Общий секрет = ECDH(мой_приватный, публичный_ключ_собеседника).
+ *     У обоих участников он получается одинаковым, по проводам никогда не идёт.
+ *  3. Из общего секрета через HKDF-SHA256 выводится ключ AES-256-GCM.
+ *     В HKDF "info" зашиты оба публичных ключа, поэтому чужой ключ не подойдёт.
+ *  4. Текст шифруется AES-256-GCM (аутентифицированное шифрование: подделка
+ *     или порча шифротекста приводит к ошибке, а не к мусору на выходе).
+ *
+ * Файл написан без зависимостей и работает и в браузере (window.EncryptoryCore),
+ * и в Node.js (module.exports) — на одном и том же WebCrypto API.
+ */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (typeof globalThis !== 'undefined') globalThis.EncryptoryCore = api;
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const CURVE = 'P-256';
+  const VERSION = 'em1';
+  const PUBLIC_PREFIX = 'epk1.';
+  const PRIVATE_PREFIX = 'ek1.';
+  const PRIVATE_PROTECTED_PREFIX = 'ek1p.';
+  const HKDF_INFO_PREFIX = 'encryptory/v1|';
+  const PBKDF2_ITERATIONS = 310000;
+
+  const ALGO_LABEL = 'ECDH P-256 + HKDF-SHA256 + AES-256-GCM';
+  const ALGO_DETAILS =
+    'Публичный ключ каждого участника + ECDH → общий секрет → HKDF-SHA256 → AES-256-GCM. ' +
+    'Приватные ключи никогда не покидают устройство.';
+
+  const ARMOR_TYPES = {
+    MESSAGE: 'ENCRYPTORY MESSAGE',
+    PUBLIC_KEY: 'ENCRYPTORY PUBLIC KEY',
+    PRIVATE_KEY: 'ENCRYPTORY PRIVATE KEY',
+  };
+
+  const BASE32_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  const textEncoder = new TextEncoder();
+  const textDecoder = new TextDecoder();
+
+  /* ------------------------------------------------------------------ */
+  /* Ошибки                                                              */
+  /* ------------------------------------------------------------------ */
+
+  class EncryptoryError extends Error {
+    constructor(code, message) {
+      super(message);
+      this.name = 'EncryptoryError';
+      this.code = code;
+    }
+  }
+
+  const fail = (code, message) => {
+    throw new EncryptoryError(code, message);
+  };
+
+  /* ------------------------------------------------------------------ */
+  /* Низкоуровневые помощники                                            */
+  /* ------------------------------------------------------------------ */
+
+  function getSubtle() {
+    const c = globalThis.crypto;
+    if (!c || !c.subtle || typeof c.subtle.generateKey !== 'function') {
+      fail(
+        'NO_WEBCRYPTO',
+        'WebCrypto недоступен. Откройте страницу по https:// или на localhost, либо запустите Node.js 20+.'
+      );
+    }
+    return c.subtle;
+  }
+
+  function randomBytes(length) {
+    const c = globalThis.crypto;
+    if (!c || typeof c.getRandomValues !== 'function') {
+      fail('NO_RANDOM', 'Источник криптостойкой случайности недоступен в этом окружении.');
+    }
+    const out = new Uint8Array(length);
+    c.getRandomValues(out);
+    return out;
+  }
+
+  /**
+   * Приводит значение к Uint8Array.
+   * Проверки намеренно не используют instanceof по границе realm: данные могут
+   * прийти из воркера, iframe или другого контекста, где свои конструкторы.
+   */
+  function toBytes(value) {
+    if (value !== null && typeof value === 'object') {
+      if (ArrayBuffer.isView(value)) {
+        return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      }
+      const tag = Object.prototype.toString.call(value);
+      if (tag === '[object ArrayBuffer]' || tag === '[object SharedArrayBuffer]') {
+        return new Uint8Array(value);
+      }
+    }
+    fail('BAD_INPUT', 'Ожидались байты (Uint8Array или ArrayBuffer).');
+  }
+
+  function concatBytes(...chunks) {
+    let total = 0;
+    for (const chunk of chunks) total += chunk.length;
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return out;
+  }
+
+  function bytesToB64u(value) {
+    const bytes = toBytes(value);
+    let base64;
+    if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
+      base64 = Buffer.from(bytes).toString('base64');
+    } else {
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      }
+      base64 = btoa(binary);
+    }
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function b64uToBytes(text, what) {
+    const label = what || 'данные';
+    const clean = String(text == null ? '' : text).replace(/\s+/g, '');
+    if (!clean) fail('BAD_BASE64', `Пустая строка вместо ${label}.`);
+    if (!/^[A-Za-z0-9\-_]+$/.test(clean)) {
+      fail('BAD_BASE64', `В ${label} есть символы, не похожие на base64url.`);
+    }
+    const base64 = clean.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (clean.length % 4)) % 4);
+    try {
+      if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
+        return new Uint8Array(Buffer.from(base64, 'base64'));
+      }
+      const binary = atob(base64);
+      const out = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+      return out;
+    } catch (error) {
+      fail('BAD_BASE64', `Не удалось разобрать ${label}: строка не является корректным base64url.`);
+    }
+  }
+
+  function base32(bytes) {
+    let bits = 0;
+    let value = 0;
+    let out = '';
+    for (const byte of bytes) {
+      value = (value << 8) | byte;
+      bits += 8;
+      while (bits >= 5) {
+        out += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
+        bits -= 5;
+      }
+    }
+    if (bits > 0) out += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+    return out;
+  }
+
+  function encodeUtf8(text) {
+    return textEncoder.encode(text);
+  }
+
+  function decodeUtf8(bytes) {
+    return textDecoder.decode(bytes);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Бронирование (armor) — читаемый текстовый контейнер                 */
+  /* ------------------------------------------------------------------ */
+
+  function wrapLines(text, width) {
+    const limit = width || 76;
+    if (text.length <= limit) return text;
+    const lines = [];
+    for (let i = 0; i < text.length; i += limit) lines.push(text.slice(i, i + limit));
+    return lines.join('\n');
+  }
+
+  function armor(type, payload, width) {
+    const begin = `-----BEGIN ${type}-----`;
+    const end = `-----END ${type}-----`;
+    return `${begin}\n${wrapLines(payload, width)}\n${end}\n`;
+  }
+
+  /**
+   * Снимает броню (если есть) и склеивает тело в одну строку.
+   * Заодно переживает цитирование из писем и чатов (ведущие «>»).
+   */
+  /**
+   * Разделитель брони. Требуем и дефисы, и слово BEGIN/END, и пробел после него:
+   * обычная строка base64url под это не подходит (пробелы в алфавит не входят),
+   * поэтому тело сообщения нельзя потерять по ошибке — даже если строка
+   * случайно начинается с «---».
+   */
+  const ARMOR_BEGIN = /^-{3,}\s*BEGIN\s+([A-Za-z0-9 ]+?)\s*-{3,}$/i;
+  const ARMOR_END = /^-{3,}\s*END\s+[A-Za-z0-9 ]+?\s*-{3,}$/i;
+
+  function stripArmor(text) {
+    const lines = String(text == null ? '' : text).replace(/\r/g, '').split('\n');
+    let type = null;
+    const body = [];
+    for (const rawLine of lines) {
+      // «> » в начале — следы цитирования в почте и мессенджерах.
+      const line = rawLine.replace(/^\s*>+\s*/, '').trim();
+      if (!line) continue;
+      const begin = ARMOR_BEGIN.exec(line);
+      if (begin) {
+        type = begin[1].replace(/\s+/g, ' ').toUpperCase();
+        continue;
+      }
+      if (ARMOR_END.test(line)) continue;
+      body.push(line);
+    }
+    return { type, payload: body.join('') };
+  }
+
+  function isArmored(text, type) {
+    const { type: found } = stripArmor(text);
+    return type ? found === type : Boolean(found);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Публичные ключи                                                     */
+  /* ------------------------------------------------------------------ */
+
+  function rawFromJwk(jwk) {
+    if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.x || !jwk.y) {
+      fail('BAD_PUBLIC_KEY', 'Ключ не является ключом ECDH на кривой P-256.');
+    }
+    const x = b64uToBytes(jwk.x, 'координате X ключа');
+    const y = b64uToBytes(jwk.y, 'координате Y ключа');
+    if (x.length !== 32 || y.length !== 32) {
+      fail('BAD_PUBLIC_KEY', 'Координаты ключа P-256 должны быть длиной 32 байта.');
+    }
+    return concatBytes(Uint8Array.of(0x04), x, y);
+  }
+
+  function assertPublicRaw(raw, what) {
+    if (raw.length !== 65 || raw[0] !== 0x04) {
+      fail('BAD_PUBLIC_KEY', `${what || 'Публичный ключ'} должен быть несжатой точкой P-256 (65 байт).`);
+    }
+    return raw;
+  }
+
+  /**
+   * Разбирает публичный ключ из текста.
+   * Принимает: epk1.<base64url>, голый base64url, JWK (JSON), с бронёй или без.
+   */
+  function parsePublicKey(input) {
+    const { payload } = stripArmor(input);
+    if (!payload) fail('BAD_PUBLIC_KEY', 'Публичный ключ не найден. Вставьте ключ, полученный от собеседника.');
+    let raw;
+    if (payload.startsWith(PUBLIC_PREFIX)) {
+      raw = b64uToBytes(payload.slice(PUBLIC_PREFIX.length), 'публичном ключе');
+    } else if (payload.startsWith('{')) {
+      let jwk;
+      try {
+        jwk = JSON.parse(payload);
+      } catch (error) {
+        fail('BAD_PUBLIC_KEY', 'Похоже на JSON, но разобрать его не получилось.');
+      }
+      raw = rawFromJwk(jwk);
+    } else {
+      raw = b64uToBytes(payload, 'публичном ключе');
+    }
+    assertPublicRaw(raw, 'Публичный ключ');
+    return { raw, text: PUBLIC_PREFIX + bytesToB64u(raw) };
+  }
+
+  function publicKeyToText(rawOrJwk) {
+    if (rawOrJwk && typeof rawOrJwk === 'object' && typeof rawOrJwk.kty === 'string') {
+      return PUBLIC_PREFIX + bytesToB64u(rawFromJwk(rawOrJwk));
+    }
+    return PUBLIC_PREFIX + bytesToB64u(assertPublicRaw(toBytes(rawOrJwk), 'Публичный ключ'));
+  }
+
+  function publicKeyToArmor(rawOrText) {
+    const text = typeof rawOrText === 'string' && rawOrText.includes('.')
+      ? parsePublicKey(rawOrText).text
+      : publicKeyToText(rawOrText);
+    return armor(ARMOR_TYPES.PUBLIC_KEY, text);
+  }
+
+  /** Короткий отпечаток ключа — чтобы глазами сверять, что ключ «тот самый». */
+  async function fingerprint(rawOrText) {
+    const raw = typeof rawOrText === 'string'
+      ? parsePublicKey(rawOrText).raw
+      : assertPublicRaw(toBytes(rawOrText), 'Публичный ключ');
+    const digest = new Uint8Array(await getSubtle().digest('SHA-256', raw));
+    const b32 = base32(digest.subarray(0, 12));
+    return (b32.match(/.{1,4}/g) || []).slice(0, 5).join('-');
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Приватные ключи                                                     */
+  /* ------------------------------------------------------------------ */
+
+  async function importPrivateKeyBytes(pkcs8) {
+    try {
+      return await getSubtle().importKey(
+        'pkcs8',
+        toBytes(pkcs8),
+        { name: 'ECDH', namedCurve: CURVE },
+        true,
+        ['deriveBits']
+      );
+    } catch (error) {
+      fail('BAD_PRIVATE_KEY', 'Не удалось прочитать приватный ключ: файл повреждён или это не ключ Encryptory.');
+    }
+  }
+
+  async function pbkdf2Key(passphrase, salt, iterations) {
+    const base = await getSubtle().importKey('raw', encodeUtf8(passphrase), 'PBKDF2', false, ['deriveKey']);
+    return getSubtle().deriveKey(
+      { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+      base,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  }
+
+  /**
+   * Собирает бронированный приватный ключ.
+   * Без пароля — как есть (ek1.), с паролем — PBKDF2-SHA256 + AES-256-GCM (ek1p.).
+   */
+  async function exportPrivateKey(pkcs8OrIdentity, passphrase) {
+    const pkcs8 = toBytes(
+      pkcs8OrIdentity && pkcs8OrIdentity.privateKeyPkcs8
+        ? pkcs8OrIdentity.privateKeyPkcs8
+        : pkcs8OrIdentity
+    );
+    if (!passphrase) {
+      return armor(ARMOR_TYPES.PRIVATE_KEY, PRIVATE_PREFIX + bytesToB64u(pkcs8));
+    }
+    const salt = randomBytes(16);
+    const iv = randomBytes(12);
+    const key = await pbkdf2Key(passphrase, salt, PBKDF2_ITERATIONS);
+    const ct = await getSubtle().encrypt({ name: 'AES-GCM', iv }, key, pkcs8);
+    const envelope = {
+      v: 1,
+      kdf: 'PBKDF2-SHA256',
+      iter: PBKDF2_ITERATIONS,
+      salt: bytesToB64u(salt),
+      iv: bytesToB64u(iv),
+      ct: bytesToB64u(ct),
+    };
+    return armor(ARMOR_TYPES.PRIVATE_KEY, PRIVATE_PROTECTED_PREFIX + bytesToB64u(encodeUtf8(JSON.stringify(envelope))));
+  }
+
+  /** Разбирает бронированный приватный ключ (при необходимости — с паролем). */
+  async function importPrivateKey(armoredText, passphrase) {
+    const { type, payload } = stripArmor(armoredText);
+    if (type && type !== ARMOR_TYPES.PRIVATE_KEY) {
+      fail('BAD_PRIVATE_KEY', 'Это не приватный ключ Encryptory, а что-то другое.');
+    }
+    let pkcs8;
+    if (payload.startsWith(PRIVATE_PROTECTED_PREFIX)) {
+      if (!passphrase) {
+        fail('PASSPHRASE_REQUIRED', 'Приватный ключ защищён паролем — укажите пароль.');
+      }
+      let envelope;
+      try {
+        envelope = JSON.parse(decodeUtf8(b64uToBytes(payload.slice(PRIVATE_PROTECTED_PREFIX.length), 'приватном ключе')));
+      } catch (error) {
+        fail('BAD_PRIVATE_KEY', 'Не удалось разобрать контейнер защищённого ключа.');
+      }
+      const salt = b64uToBytes(envelope.salt, 'соли ключа');
+      const iv = b64uToBytes(envelope.iv, 'nonce ключа');
+      const ct = b64uToBytes(envelope.ct, 'шифротекста ключа');
+      const iterations = Number(envelope.iter) || PBKDF2_ITERATIONS;
+      const key = await pbkdf2Key(passphrase, salt, iterations);
+      try {
+        pkcs8 = new Uint8Array(await getSubtle().decrypt({ name: 'AES-GCM', iv }, key, ct));
+      } catch (error) {
+        fail('BAD_PASSPHRASE', 'Неверный пароль или повреждённый ключ.');
+      }
+    } else if (payload.startsWith(PRIVATE_PREFIX)) {
+      pkcs8 = b64uToBytes(payload.slice(PRIVATE_PREFIX.length), 'приватном ключе');
+    } else {
+      fail('BAD_PRIVATE_KEY', 'Не похоже на приватный ключ Encryptory.');
+    }
+
+    const privateKey = await importPrivateKeyBytes(pkcs8);
+    let jwk;
+    try {
+      jwk = await getSubtle().exportKey('jwk', privateKey);
+    } catch (error) {
+      fail('BAD_PRIVATE_KEY', 'Ключ прочитан, но извлечь публичную часть не получилось.');
+    }
+    const raw = rawFromJwk(jwk);
+    return {
+      publicKeyText: PUBLIC_PREFIX + bytesToB64u(raw),
+      publicKeyRaw: raw,
+      fingerprint: await fingerprint(raw),
+      privateKey,
+      privateKeyPkcs8: pkcs8,
+      privateKeyArmor: String(armoredText).trim() + '\n',
+      encryptedAtRest: payload.startsWith(PRIVATE_PROTECTED_PREFIX),
+    };
+  }
+
+  function isPrivateKeyProtected(armoredText) {
+    return stripArmor(armoredText).payload.startsWith(PRIVATE_PROTECTED_PREFIX);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Идентичность                                                        */
+  /* ------------------------------------------------------------------ */
+
+  /** Генерирует новую пару ключей. */
+  async function generateIdentity(passphrase) {
+    const subtle = getSubtle();
+    const pair = await subtle.generateKey({ name: 'ECDH', namedCurve: CURVE }, true, ['deriveBits']);
+    const raw = new Uint8Array(await subtle.exportKey('raw', pair.publicKey));
+    const pkcs8 = new Uint8Array(await subtle.exportKey('pkcs8', pair.privateKey));
+    return {
+      publicKeyText: PUBLIC_PREFIX + bytesToB64u(raw),
+      publicKeyRaw: raw,
+      fingerprint: await fingerprint(raw),
+      privateKey: pair.privateKey,
+      privateKeyPkcs8: pkcs8,
+      privateKeyArmor: await exportPrivateKey(pkcs8, passphrase || null),
+      encryptedAtRest: Boolean(passphrase),
+    };
+  }
+
+  function publicKeyArmor(identityOrText) {
+    const text = typeof identityOrText === 'string' ? identityOrText : identityOrText.publicKeyText;
+    return publicKeyToArmor(text);
+  }
+
+  async function getPrivateKey(identity) {
+    if (!identity) fail('NO_IDENTITY', 'Сначала сгенерируйте или импортируйте свою пару ключей.');
+    if (identity.privateKey) return identity.privateKey;
+    if (identity.privateKeyPkcs8) return importPrivateKeyBytes(identity.privateKeyPkcs8);
+    if (identity.privateKeyArmor) {
+      const parsed = await importPrivateKey(identity.privateKeyArmor, identity.passphrase);
+      return parsed.privateKey;
+    }
+    fail('NO_IDENTITY', 'У идентичности нет приватного ключа.');
+  }
+
+  function getPublicRaw(identity) {
+    if (!identity) fail('NO_IDENTITY', 'Нет идентичности.');
+    if (identity.publicKeyRaw) return assertPublicRaw(toBytes(identity.publicKeyRaw), 'Публичный ключ');
+    if (identity.publicKeyText) return parsePublicKey(identity.publicKeyText).raw;
+    fail('NO_IDENTITY', 'У идентичности нет публичного ключа.');
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Вывод ключа шифрования                                              */
+  /* ------------------------------------------------------------------ */
+
+  function compareBytes(a, b) {
+    const len = Math.min(a.length, b.length);
+    for (let i = 0; i < len; i += 1) {
+      if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return a.length - b.length;
+  }
+
+  /**
+   * ECDH + HKDF → ключ AES-256-GCM.
+   * myPrivateKey      — приватный ключ своей пары
+   * peerPublicRaw     — публичный ключ собеседника
+   * salt              — случайная соль сообщения
+   * myPublicRaw / peerPublicRaw передаются ещё раз для привязки ключа к паре участников.
+   */
+  async function deriveAesKey(myPrivateKey, peerPublicRaw, salt, pubA, pubB) {
+    const subtle = getSubtle();
+    const peerKey = await subtle.importKey(
+      'raw',
+      assertPublicRaw(toBytes(peerPublicRaw), 'Публичный ключ собеседника'),
+      { name: 'ECDH', namedCurve: CURVE },
+      false,
+      []
+    );
+    let shared;
+    try {
+      shared = await subtle.deriveBits({ name: 'ECDH', public: peerKey }, myPrivateKey, 256);
+    } catch (error) {
+      fail('ECDH_FAILED', 'Не удалось выработать общий секрет — проверьте, что ключи относятся к кривой P-256.');
+    }
+    const ordered = [toBytes(pubA), toBytes(pubB)].sort(compareBytes);
+    const info = concatBytes(encodeUtf8(HKDF_INFO_PREFIX), ordered[0], ordered[1]);
+    const hkdfKey = await subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
+    return subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: toBytes(salt), info },
+      hkdfKey,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Шифрование / расшифровка                                            */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Шифрует текст для получателя.
+   *   { plaintext, recipient (ключ-текст), identity }  →  бронированный текст
+   */
+  async function encrypt({ plaintext, recipient, identity, now }) {
+    if (typeof plaintext !== 'string' || plaintext.length === 0) {
+      fail('EMPTY_TEXT', 'Нечего шифровать: текст пуст.');
+    }
+    const recipientKey = parsePublicKey(recipient);
+    const senderRaw = getPublicRaw(identity);
+    const myPrivateKey = await getPrivateKey(identity);
+
+    const salt = randomBytes(32);
+    const iv = randomBytes(12);
+    const timestamp = Math.floor((now ? Number(now) : Date.now()) / 1000);
+    const header = [VERSION, bytesToB64u(senderRaw), bytesToB64u(salt), bytesToB64u(iv), String(timestamp)].join('.');
+
+    const aesKey = await deriveAesKey(myPrivateKey, recipientKey.raw, salt, senderRaw, recipientKey.raw);
+    const ciphertext = await getSubtle().encrypt(
+      { name: 'AES-GCM', iv, additionalData: encodeUtf8(header), tagLength: 128 },
+      aesKey,
+      encodeUtf8(plaintext)
+    );
+    return armor(ARMOR_TYPES.MESSAGE, `${header}.${bytesToB64u(ciphertext)}`);
+  }
+
+  /** Читает «конверт» без расшифровки: от кого и когда. */
+  function parseMessage(armoredText) {
+    const { type, payload } = stripArmor(armoredText);
+    if (type && type !== ARMOR_TYPES.MESSAGE) {
+      fail('BAD_MESSAGE', 'Это не сообщение Encryptory.');
+    }
+    const parts = payload.split('.');
+    if (parts.length !== 6) {
+      fail('BAD_MESSAGE', 'Сообщение повреждено: не совпадает число частей контейнера.');
+    }
+    const [version, senderB64, saltB64, ivB64, timestamp, body] = parts;
+    if (version !== VERSION) {
+      fail('UNSUPPORTED_VERSION', `Неизвестная версия контейнера «${version}» — возможно, шифровано более новой версией Encryptory.`);
+    }
+    const senderRaw = assertPublicRaw(b64uToBytes(senderB64, 'ключе отправителя'), 'Ключ отправителя');
+    return {
+      version,
+      senderRaw,
+      senderPublicKeyText: PUBLIC_PREFIX + bytesToB64u(senderRaw),
+      senderB64,
+      salt: b64uToBytes(saltB64, 'соли сообщения'),
+      iv: b64uToBytes(ivB64, 'nonce сообщения'),
+      ciphertext: b64uToBytes(body, 'шифротексте'),
+      timestamp: Number(timestamp) * 1000 || null,
+      header: [version, senderB64, saltB64, ivB64, timestamp].join('.'),
+    };
+  }
+
+  /** Метаданные сообщения без расшифровки. */
+  async function inspect(armoredText) {
+    const parsed = parseMessage(armoredText);
+    return {
+      senderPublicKeyText: parsed.senderPublicKeyText,
+      senderFingerprint: await fingerprint(parsed.senderRaw),
+      timestamp: parsed.timestamp,
+      algorithm: ALGO_LABEL,
+    };
+  }
+
+  function looksLikeMessage(text) {
+    const { type, payload } = stripArmor(text);
+    if (type === ARMOR_TYPES.MESSAGE) return true;
+    return payload.startsWith(`${VERSION}.`);
+  }
+
+  /** Расшифровывает сообщение своим приватным ключом. */
+  async function decrypt({ message, identity }) {
+    const parsed = parseMessage(message);
+    const myPrivateKey = await getPrivateKey(identity);
+    const myPublicRaw = getPublicRaw(identity);
+
+    const aesKey = await deriveAesKey(myPrivateKey, parsed.senderRaw, parsed.salt, parsed.senderRaw, myPublicRaw);
+    let plaintextBytes;
+    try {
+      plaintextBytes = await getSubtle().decrypt(
+        { name: 'AES-GCM', iv: parsed.iv, additionalData: encodeUtf8(parsed.header), tagLength: 128 },
+        aesKey,
+        parsed.ciphertext
+      );
+    } catch (error) {
+      fail(
+        'DECRYPT_FAILED',
+        'Расшифровать не удалось. Сообщение повреждено, подделано или зашифровано не для вашего ключа.'
+      );
+    }
+    return {
+      plaintext: decodeUtf8(plaintextBytes),
+      senderPublicKeyText: parsed.senderPublicKeyText,
+      senderFingerprint: await fingerprint(parsed.senderRaw),
+      timestamp: parsed.timestamp,
+    };
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Самопроверка                                                        */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Прогоняет полный цикл «зашифровал → расшифровал» и набор негативных проверок.
+   * Возвращает список { name, ok, detail, ms }.
+   */
+  async function selfTest(onStep) {
+    const results = [];
+    const run = async (name, fn) => {
+      const started = Date.now();
+      try {
+        const detail = await fn();
+        results.push({ name, ok: true, detail: detail || '', ms: Date.now() - started });
+      } catch (error) {
+        results.push({ name, ok: false, detail: error && error.message ? error.message : String(error), ms: Date.now() - started });
+      }
+      if (typeof onStep === 'function') onStep(results[results.length - 1]);
+      return results[results.length - 1];
+    };
+    const expectFailure = async (fn, expectedCode) => {
+      try {
+        await fn();
+      } catch (error) {
+        if (expectedCode && error.code !== expectedCode) {
+          fail('SELFTEST', `ожидалась ошибка ${expectedCode}, получена ${error.code}`);
+        }
+        return null;
+      }
+      fail('SELFTEST', 'операция завершилась успешно, хотя должна была упасть');
+    };
+
+    let alice;
+    let bob;
+    let carol;
+
+    await run('Генерация пары ключей (Алиса)', async () => {
+      alice = await generateIdentity();
+      return `отпечаток ${alice.fingerprint}`;
+    });
+    await run('Генерация пары ключей (Боб)', async () => {
+      bob = await generateIdentity();
+      return `отпечаток ${bob.fingerprint}`;
+    });
+    await run('Генерация третьей пары (Кэрол, для негативных проверок)', async () => {
+      carol = await generateIdentity();
+      return `отпечаток ${carol.fingerprint}`;
+    });
+    await run('Ключи различаются', async () => {
+      if (alice.publicKeyText === bob.publicKeyText) fail('SELFTEST', 'публичные ключи совпали');
+      return 'Алиса ≠ Боб';
+    });
+
+    let message;
+    const sample = 'Привет, Боб! Это секретное сообщение от Алисы. 🐈 42.';
+    await run('Шифрование Алиса → Боб', async () => {
+      message = await encrypt({ plaintext: sample, recipient: bob.publicKeyText, identity: alice });
+      return `${message.length} символов на выходе`;
+    });
+    await run('Шифротекст не содержит исходного текста', async () => {
+      if (message.includes('Боб') || message.includes('секретн')) fail('SELFTEST', 'исходный текст виден в шифротексте');
+      return 'совпадений нет';
+    });
+    await run('Расшифровка Бобом', async () => {
+      const opened = await decrypt({ message, identity: bob });
+      if (opened.plaintext !== sample) fail('SELFTEST', 'расшифрованный текст не совпал с исходным');
+      return `текст совпал, отправитель ${opened.senderFingerprint}`;
+    });
+    await run('Отпечаток отправителя определяется верно', async () => {
+      const opened = await decrypt({ message, identity: bob });
+      if (opened.senderFingerprint !== alice.fingerprint) fail('SELFTEST', 'отпечаток отправителя не совпадает');
+      return opened.senderFingerprint;
+    });
+    await run('Ответ в обратную сторону (Боб → Алиса)', async () => {
+      const reply = await encrypt({ plaintext: 'Привет, Алиса!', recipient: alice.publicKeyText, identity: bob });
+      const opened = await decrypt({ message: reply, identity: alice });
+      if (opened.plaintext !== 'Привет, Алиса!') fail('SELFTEST', 'текст не совпал');
+      return 'OK';
+    });
+    await run('Чужой ключ (Кэрол) не расшифровывает', () =>
+      expectFailure(() => decrypt({ message, identity: carol }), 'DECRYPT_FAILED'));
+    await run('Посылка самому себе шифруется и читается', async () => {
+      const note = await encrypt({ plaintext: 'заметка себе', recipient: alice.publicKeyText, identity: alice });
+      const opened = await decrypt({ message: note, identity: alice });
+      if (opened.plaintext !== 'заметка себе') fail('SELFTEST', 'текст не совпал');
+      if (opened.senderFingerprint !== alice.fingerprint) fail('SELFTEST', 'отпечаток отправителя не совпал');
+      return 'OK';
+    });
+    await run('Отправитель не может прочитать посылку, адресованную другому', () =>
+      expectFailure(() => decrypt({ message, identity: alice }), 'DECRYPT_FAILED'));
+    await run('Порча шифротекста обнаруживается', async () => {
+      const parts = stripArmor(message).payload.split('.');
+      const body = b64uToBytes(parts[5], 'шифротексте');
+      body[3] ^= 0x01;
+      parts[5] = bytesToB64u(body);
+      return expectFailure(() => decrypt({ message: parts.join('.'), identity: bob }), 'DECRYPT_FAILED');
+    });
+    await run('Подмена ключа отправителя обнаруживается', async () => {
+      const parts = stripArmor(message).payload.split('.');
+      parts[1] = bytesToB64u(carol.publicKeyRaw);
+      return expectFailure(() => decrypt({ message: parts.join('.'), identity: bob }), 'DECRYPT_FAILED');
+    });
+    await run('Ключ не защищён паролем и читается', async () => {
+      const again = await importPrivateKey(alice.privateKeyArmor);
+      if (again.publicKeyText !== alice.publicKeyText) fail('SELFTEST', 'публичный ключ не восстановился');
+      return `отпечаток ${again.fingerprint}`;
+    });
+    await run('Парольная защита ключа: экспорт → импорт', async () => {
+      const protectedArmor = await exportPrivateKey(alice.privateKeyPkcs8, 'мой-пароль-42');
+      if (!isPrivateKeyProtected(protectedArmor)) fail('SELFTEST', 'ключ не помечен как защищённый');
+      const wrong = await expectFailure(() => importPrivateKey(protectedArmor, 'неверный-пароль'), 'BAD_PASSPHRASE');
+      const restored = await importPrivateKey(protectedArmor, 'мой-пароль-42');
+      if (restored.publicKeyText !== alice.publicKeyText) fail('SELFTEST', 'ключ после расшифровки не совпал');
+      return 'верный пароль — ок, неверный — отказ';
+    });
+    await run('Чужой публичный ключ не подходит для расшифровки', () =>
+      expectFailure(
+        () => decrypt({ message, identity: { publicKeyText: carol.publicKeyText, privateKeyPkcs8: carol.privateKeyPkcs8 } }),
+        'DECRYPT_FAILED'
+      ));
+    await run('Пустой текст не шифруется', () => expectFailure(() => encrypt({ plaintext: '', recipient: bob.publicKeyText, identity: alice }), 'EMPTY_TEXT'));
+    await run('Броня устойчива к переносам строк, пробелам и цитированию', async () => {
+      const messy = '  ' + message.trim().split('\n').map((line) => `> ${line}`).join('\n   \n') + '\n\n';
+      const opened = await decrypt({ message: messy, identity: bob });
+      if (opened.plaintext !== sample) fail('SELFTEST', 'текст не совпал');
+      return 'OK';
+    });
+    await run('Дефисы в теле не путаются с разделителем брони', async () => {
+      const tricky = '-----BEGIN ENCRYPTORY MESSAGE-----\n---abc--def\n-----END ENCRYPTORY MESSAGE-----';
+      const { payload, type } = stripArmor(tricky);
+      if (payload !== '---abc--def') fail('SELFTEST', `тело искажено: «${payload}»`);
+      if (type !== ARMOR_TYPES.MESSAGE) fail('SELFTEST', `тип брони не распознан: «${type}»`);
+      return 'OK';
+    });
+    await run('Большой текст (100 КБ) шифруется и читается', async () => {
+      const big = 'Ячейка №' .repeat(10000);
+      const packed = await encrypt({ plaintext: big, recipient: bob.publicKeyText, identity: alice });
+      const opened = await decrypt({ message: packed, identity: bob });
+      if (opened.plaintext !== big) fail('SELFTEST', 'текст не совпал');
+      return `${(big.length / 1024).toFixed(0)} КБ, контейнер ${(packed.length / 1024).toFixed(0)} КБ`;
+    });
+
+    return results;
+  }
+
+  return {
+    CURVE,
+    VERSION,
+    ALGO_LABEL,
+    ALGO_DETAILS,
+    ARMOR_TYPES,
+    PBKDF2_ITERATIONS,
+    EncryptoryError,
+    generateIdentity,
+    exportPrivateKey,
+    importPrivateKey,
+    isPrivateKeyProtected,
+    parsePublicKey,
+    publicKeyToText,
+    publicKeyToArmor,
+    publicKeyArmor,
+    fingerprint,
+    encrypt,
+    decrypt,
+    inspect,
+    parseMessage,
+    looksLikeMessage,
+    isArmored,
+    stripArmor,
+    selfTest,
+  };
+});
+</script>
+<script>
+/*
+ * Encryptory — интерфейс. Вся криптография — в src/encryptory-core.js.
+ * Ничего не отправляется по сети: только WebCrypto, буфер обмена и файлы по клику.
+ */
+(function () {
+  'use strict';
+
+  const core = window.EncryptoryCore;
+  const $ = (selector) => document.querySelector(selector);
+  const SESSION_KEY = 'encryptory.session.v1';
+
+  /** Состояние вкладки. Приватный ключ живёт только в памяти и в sessionStorage. */
+  const state = {
+    identity: null,      // { publicKeyText, fingerprint, privateKey, privateKeyArmor, ... }
+    ownArmor: null,      // бронированный приватный ключ (для скачивания/сохранения)
+    ownProtected: false, // защищён ли ключ паролем
+    lockedArmor: null,   // ключ, который ждёт ввода пароля
+    peer: null,          // { text, fingerprint }
+    peerText: null,      // именно тот текст ключа собеседника, что сохранён
+    pendingFileTarget: null,
+  };
+
+  /* ------------------------------------------------------------------ */
+  /* Мелкие утилиты                                                      */
+  /* ------------------------------------------------------------------ */
+
+  const errText = (error) => (error && error.message ? error.message : String(error));
+
+  function toast(message, kind, ms) {
+    const el = document.createElement('div');
+    el.className = `toast ${kind || ''}`.trim();
+    el.textContent = message;
+    $('#toasts').appendChild(el);
+    const life = ms || (kind === 'err' ? 7000 : 3800);
+    setTimeout(() => {
+      el.style.transition = 'opacity .25s, transform .25s';
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(6px)';
+      setTimeout(() => el.remove(), 260);
+    }, life);
+  }
+
+  async function copyFrom(selector, button) {
+    const source = $(selector);
+    const text = source.value != null ? source.value : source.textContent;
+    if (!text || !text.trim()) {
+      toast('Тут пока нечего копировать.', 'warn');
+      return;
+    }
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        selectAndCopy(source);
+      }
+      flash(button, 'Скопировано');
+    } catch (error) {
+      selectAndCopy(source);
+      toast('Скопировано выделением — нажмите Ctrl/Cmd+C.', 'warn');
+    }
+  }
+
+  function selectAndCopy(source) {
+    source.focus();
+    source.select();
+    try {
+      document.execCommand('copy');
+    } catch (error) {
+      /* ничего: останется выделенный текст */
+    }
+  }
+
+  /** Прокрутка к элементу — если окружение это умеет. Ошибка прокрутки не должна ломать операцию. */
+  function scrollTo(target, options) {
+    const el = typeof target === 'string' ? $(target) : target;
+    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView(options);
+  }
+
+  function flash(button, label) {
+    if (!button) return;
+    if (!button.dataset.original) button.dataset.original = button.innerHTML;
+    button.textContent = label;
+    button.disabled = true;
+    setTimeout(() => {
+      button.innerHTML = button.dataset.original;
+      button.disabled = false;
+    }, 1100);
+  }
+
+  function download(filename, text) {
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  function formatTime(ms) {
+    if (!ms) return null;
+    try {
+      return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(ms));
+    } catch (error) {
+      return new Date(ms).toISOString();
+    }
+  }
+
+  function formatSize(text) {
+    const bytes = new TextEncoder().encode(text).length;
+    if (bytes < 1024) return `${bytes} Б`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
+    return `${(bytes / 1024 / 1024).toFixed(2)} МБ`;
+  }
+
+  /** Блокирует кнопку на время асинхронной операции, чтобы не жали дважды. */
+  async function withBusy(button, busyLabel, fn) {
+    if (!button) return fn();
+    const original = button.innerHTML;
+    button.disabled = true;
+    if (busyLabel) button.textContent = busyLabel;
+    try {
+      return await fn();
+    } finally {
+      button.innerHTML = original;
+      updateAvailability();
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Хранилище вкладки                                                   */
+  /* ------------------------------------------------------------------ */
+
+  function saveSession() {
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+        ownArmor: state.ownArmor,
+        ownProtected: state.ownProtected,
+        peer: state.peer ? state.peer.text : null,
+      }));
+    } catch (error) {
+      /* приватный режим и т.п. — просто не сохраняем */
+    }
+  }
+
+  function loadSession() {
+    let raw = null;
+    try {
+      raw = sessionStorage.getItem(SESSION_KEY);
+    } catch (error) {
+      return null;
+    }
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Отрисовка                                                           */
+  /* ------------------------------------------------------------------ */
+
+  function updateAvailability() {
+    const hasOwn = Boolean(state.identity);
+    const hasPeer = Boolean(state.peer);
+    const busy = new Set(
+      Array.from(document.querySelectorAll('button[data-busy="1"]')).map((btn) => btn.id)
+    );
+    const setDisabled = (selector, value) => {
+      const btn = $(selector);
+      if (btn && !busy.has(btn.id)) btn.disabled = value;
+    };
+
+    setDisabled('#encrypt-btn', !(hasOwn && hasPeer));
+    // для локальной проверки ключ собеседника не нужен: она работает на своих ключах
+    setDisabled('#self-check-btn', !hasOwn);
+    setDisabled('#decrypt-btn', !hasOwn || !$('#ciphertext').value.trim());
+    setDisabled('#save-peer-btn', !$('#peer-input').value.trim());
+
+    $('#enc-chip').textContent = hasOwn && hasPeer ? 'готово' : (hasPeer ? 'нужен мой ключ' : 'нужен ключ собеседника');
+    $('#enc-chip').dataset.state = hasOwn && hasPeer ? 'ok' : 'warn';
+
+    $('#dec-chip').textContent = hasOwn ? 'готово' : 'нужен мой приватный ключ';
+    $('#dec-chip').dataset.state = hasOwn ? 'ok' : 'warn';
+
+    const status = $('#key-status');
+    if (!hasOwn) {
+      status.textContent = 'Ключей пока нет';
+      status.dataset.state = 'warn';
+    } else if (!hasPeer) {
+      status.textContent = 'Осталось вставить ключ собеседника';
+      status.dataset.state = 'warn';
+      } else {
+        status.textContent = 'Готово к работе';
+        status.dataset.state = 'ok';
+      }
+  }
+
+  function renderOwn() {
+    const identity = state.identity;
+    $('#own-empty').hidden = Boolean(identity) || Boolean(state.lockedArmor);
+    $('#own-ready').hidden = !identity;
+    $('#own-locked').hidden = !state.lockedArmor;
+
+    if (identity) {
+      $('#own-fp').hidden = false;
+      $('#own-fp').textContent = identity.fingerprint;
+      $('#own-pub').value = core.publicKeyArmor(identity.publicKeyText).trim();
+      $('#own-priv').value = identity.privateKeyArmor || state.ownArmor || '';
+      $('#priv-hint').textContent = identity.encryptedAtRest
+        ? 'Ключ защищён паролем: без пароля этот файл бесполезен, но пароль лучше не забывать — восстановить его нельзя.'
+        : 'Ключ не защищён паролем: файл с ним = ваша личность. Храните его отдельно от переписки и не отправляйте никому.';
+    } else {
+      $('#own-fp').hidden = true;
+      $('#own-fp').textContent = '';
+    }
+  }
+
+  function renderPeer() {
+    const peer = state.peer;
+    $('#peer-fp').hidden = !peer;
+    if (peer) {
+      $('#peer-fp').textContent = peer.fingerprint;
+      $('#peer-card').classList.add('is-set');
+    } else {
+      $('#peer-card').classList.remove('is-set');
+    }
+  }
+
+  function render() {
+    renderOwn();
+    renderPeer();
+    updateAvailability();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Ключи: свои                                                         */
+  /* ------------------------------------------------------------------ */
+
+  async function generateOwn() {
+    const protect = $('#protect-toggle').checked;
+    const passphrase = $('#protect-pass').value;
+    if (protect && passphrase.length < 8) {
+      toast('Пароль короче 8 символов — придумайте длиннее (лучше фразу из нескольких слов).', 'warn');
+      return;
+    }
+    await withBusy($('#generate-btn'), 'Генерирую…', async () => {
+      try {
+        const identity = await core.generateIdentity(protect ? passphrase : null);
+        state.identity = identity;
+        state.ownArmor = identity.privateKeyArmor;
+        state.ownProtected = identity.encryptedAtRest;
+        state.lockedArmor = null;
+        $('#protect-pass').value = '';
+        saveSession();
+        render();
+        toast('Пара ключей создана. Передайте собеседнику публичный ключ — и сверьте отпечаток.', 'ok');
+      } catch (error) {
+        toast(errText(error), 'err');
+      }
+    });
+  }
+
+  function resetOwn() {
+    if (state.identity && !window.confirm('Удалить эту пару ключей из вкладки? Старые сообщения, зашифрованные на неё, перестанут расшифровываться.')) {
+      return;
+    }
+    state.identity = null;
+    state.ownArmor = null;
+    state.ownProtected = false;
+    state.lockedArmor = null;
+    $('#own-priv').classList.add('hidden');
+    $('#protect-pass').value = '';
+    saveSession();
+    render();
+    toast('Ключи убраны из вкладки. Если файл сохранён — его можно импортировать снова.', 'warn');
+  }
+
+  async function importOwnFromText(text, passphrase) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) {
+      toast('Пусто: вставьте содержимое файла с приватным ключом.', 'warn');
+      return;
+    }
+    if (trimmed.includes('ENCRYPTORY PUBLIC KEY') || trimmed.startsWith('epk1.')) {
+      toast('Это публичный ключ. Для работы нужен приватный (файл начинается с EK1/EK1P).', 'err');
+      return;
+    }
+    try {
+      const identity = await core.importPrivateKey(trimmed, passphrase || null);
+      state.identity = identity;
+      state.ownArmor = trimmed.endsWith('\n') ? trimmed : `${trimmed}\n`;
+      state.ownProtected = identity.encryptedAtRest;
+      state.lockedArmor = null;
+      saveSession();
+      render();
+      toast(`Ключ импортирован. Отпечаток: ${identity.fingerprint}`, 'ok');
+    } catch (error) {
+      if (error && error.code === 'PASSPHRASE_REQUIRED') {
+        state.lockedArmor = trimmed;
+        render();
+        $('#unlock-pass').focus();
+        toast('Ключ защищён паролем — введите его, чтобы разблокировать.', 'warn');
+        return;
+      }
+      toast(errText(error), 'err');
+    }
+  }
+
+  async function unlockOwn() {
+    const passphrase = $('#unlock-pass').value;
+    if (!state.lockedArmor) return;
+    await withBusy($('#unlock-btn'), 'Проверяю…', async () => {
+      try {
+        const identity = await core.importPrivateKey(state.lockedArmor, passphrase);
+        state.identity = identity;
+        state.ownArmor = state.lockedArmor;
+        state.ownProtected = true;
+        state.lockedArmor = null;
+        $('#unlock-pass').value = '';
+        saveSession();
+        render();
+        toast(`Ключ разблокирован. Отпечаток: ${identity.fingerprint}`, 'ok');
+      } catch (error) {
+        toast(errText(error), 'err');
+      }
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Ключи: собеседника                                                  */
+  /* ------------------------------------------------------------------ */
+
+  async function savePeerKey(text) {
+    const value = String(text == null ? $('#peer-input').value : text).trim();
+    if (!value) {
+      toast('Вставьте публичный ключ собеседника.', 'warn');
+      return;
+    }
+    try {
+      const parsed = core.parsePublicKey(value);
+      if (state.identity && parsed.text === state.identity.publicKeyText) {
+        toast('Это ваш собственный публичный ключ. Нужен ключ собеседника.', 'warn');
+        return;
+      }
+      const fp = await core.fingerprint(parsed.raw);
+      state.peer = { text: parsed.text, fingerprint: fp };
+      state.peerText = parsed.text;
+      $('#peer-input').value = core.publicKeyArmor(parsed.text).trim();
+      saveSession();
+      render();
+      toast(`Ключ собеседника сохранён. Отпечаток: ${fp}`, 'ok');
+    } catch (error) {
+      toast(errText(error), 'err');
+    }
+  }
+
+  function clearPeerKey() {
+    state.peer = null;
+    state.peerText = null;
+    $('#peer-input').value = '';
+    saveSession();
+    render();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Шифрование и расшифровка                                            */
+  /* ------------------------------------------------------------------ */
+
+  function showEncryptError(message) {
+    removeError('#enc-error');
+    const box = document.createElement('div');
+    box.className = 'error-box';
+    box.id = 'enc-error';
+    box.textContent = message;
+    $('#enc-out-block').before(box);
+  }
+
+  function showDecryptError(message) {
+    removeError('#dec-error');
+    const box = document.createElement('div');
+    box.className = 'error-box';
+    box.id = 'dec-error';
+    box.textContent = message;
+    $('#dec-out-block').before(box);
+    $('#dec-out-block').hidden = true;
+  }
+
+  function removeError(selector) {
+    const el = $(selector);
+    if (el) el.remove();
+  }
+
+  async function doEncrypt(button) {
+    const plaintext = $('#plaintext').value;
+    if (!plaintext) {
+      toast('Введите текст, который нужно зашифровать.', 'warn');
+      $('#plaintext').focus();
+      return;
+    }
+    if (!state.identity || !state.peer) {
+      toast('Нужны и ваш ключ, и ключ собеседника.', 'warn');
+      return;
+    }
+    button.dataset.busy = '1';
+    button.disabled = true;
+    try {
+      removeError('#enc-error');
+      const message = await core.encrypt({ plaintext, recipient: state.peer.text, identity: state.identity });
+      $('#enc-out').value = message.trim();
+      $('#enc-out-block').hidden = false;
+      $('#enc-meta').textContent = `на выходе ${formatSize(message)}`;
+      toast('Готово. Шифротекст можно отдавать собеседнику по любому каналу.', 'ok');
+    } catch (error) {
+      showEncryptError(errText(error));
+      $('#enc-out-block').hidden = true;
+      toast(errText(error), 'err');
+    } finally {
+      button.dataset.busy = '';
+      updateAvailability();
+    }
+  }
+
+  /**
+   * Локальная проверка работоспособности: убеждаемся, что «каша» превращается
+   * обратно в текст, не выходя из этой вкладки.
+   *
+   * Расшифровать собственную посылку адресату нельзя — для этого нужен приватный
+   * ключ получателя, которого у отправителя нет и быть не должно. Поэтому проверяем
+   * на двух временных получателях, ключи которых живут только здесь:
+   *   • самому себе — свой ключ участвует и со стороны отправителя, и со стороны получателя;
+   *   • временному «двойнику» — полная симуляция обмена, ключи у сторон разные.
+   * Плюс контрольные проверки: посторонний ключ не должен ничего прочитать,
+   * а исходный текст не должен угадываться в шифротексте.
+   */
+  async function doSelfCheck(button) {
+    const plaintext = $('#plaintext').value;
+    if (!plaintext) {
+      toast('Введите текст — его и проверим.', 'warn');
+      $('#plaintext').focus();
+      return;
+    }
+    if (!state.identity) {
+      toast('Сначала создайте или импортируйте свою пару ключей.', 'warn');
+      scrollTo('#own-card', { behavior: 'smooth', block: 'center' });
+      return;
+    }
+    button.dataset.busy = '1';
+    button.disabled = true;
+    const steps = [];
+    try {
+      // 1. Посылка самому себе: шифруем своим публичным ключом, читаем своим приватным.
+      const toSelf = await core.encrypt({ plaintext, recipient: state.identity.publicKeyText, identity: state.identity });
+      const selfOpened = await core.decrypt({ message: toSelf, identity: state.identity });
+      steps.push({ name: 'Самому себе: зашифровать и прочитать своим ключом', ok: selfOpened.plaintext === plaintext });
+
+      // 2. Посылка временному «двойнику»: это уже настоящий обмен между разными ключами.
+      const twin = await core.generateIdentity();
+      const toTwin = await core.encrypt({ plaintext, recipient: twin.publicKeyText, identity: state.identity });
+      const twinOpened = await core.decrypt({ message: toTwin, identity: twin });
+      steps.push({ name: 'Двойнику: зашифровать одним ключом и прочитать другим', ok: twinOpened.plaintext === plaintext });
+
+      // 3. Посторонний ключ не должен прочитать эту посылку.
+      const stranger = await core.generateIdentity();
+      let rejected = false;
+      try {
+        await core.decrypt({ message: toTwin, identity: stranger });
+      } catch (error) {
+        rejected = true;
+      }
+      steps.push({ name: 'Чужой ключ посылку не читает', ok: rejected });
+
+      // 4. Исходный текст не должен угадываться в шифротексте.
+      steps.push({ name: 'В шифротексте нет исходного текста', ok: !toTwin.includes(plaintext) });
+
+      const allOk = steps.every((step) => step.ok);
+      $('#local-out').value = (twinOpened ? twinOpened.plaintext : selfOpened.plaintext);
+      $('#local-ct').value = toTwin.trim();
+      $('#local-steps').innerHTML = '';
+      for (const step of steps) {
+        const li = document.createElement('li');
+        li.className = step.ok ? 'pass' : 'fail';
+        li.innerHTML = `<span class="mark">${step.ok ? '✓' : '✗'}</span><span>${step.name}</span>`;
+        $('#local-steps').appendChild(li);
+      }
+      $('#local-check').hidden = false;
+      $('#local-check').classList.toggle('mismatch', !allOk);
+      const verdict = $('#local-verdict');
+      verdict.textContent = allOk ? `${steps.length} из ${steps.length} — совпало ✓` : 'есть расхождения ✗';
+      verdict.className = allOk ? 'badge-ok' : 'badge-err';
+      toast(
+        allOk
+          ? 'Локальная проверка пройдена: шифрование на этой машине работает, текст возвращается без потерь.'
+          : 'Локальная проверка нашла расхождения — не отправляйте секреты, пока не разберётесь.',
+        allOk ? 'ok' : 'err'
+      );
+    } catch (error) {
+      showEncryptError(errText(error));
+      toast(errText(error), 'err');
+    } finally {
+      button.dataset.busy = '';
+      updateAvailability();
+    }
+  }
+
+  async function doDecrypt() {
+    const ciphertext = $('#ciphertext').value;
+    if (!ciphertext.trim()) {
+      toast('Вставьте шифротекст, который вам прислали.', 'warn');
+      return;
+    }
+    if (!state.identity) {
+      toast('Сначала создайте или импортируйте свою пару ключей.', 'warn');
+      scrollTo('#own-card', { behavior: 'smooth', block: 'center' });
+      return;
+    }
+    const button = $('#decrypt-btn');
+    button.dataset.busy = '1';
+    button.disabled = true;
+    try {
+      removeError('#dec-error');
+      const info = await core.inspect(ciphertext).catch(() => null);
+      const opened = await core.decrypt({ message: ciphertext, identity: state.identity });
+      $('#dec-out').value = opened.plaintext;
+      $('#dec-out-block').hidden = false;
+
+      const bits = [`от отправителя ${opened.senderFingerprint}`];
+      const when = formatTime(opened.timestamp);
+      if (when) bits.push(when);
+      if (info) bits.push(`${opened.plaintext.length} символов`);
+      $('#dec-meta').textContent = bits.join(' · ');
+
+      const knownSender = state.peer && state.peer.text === opened.senderPublicKeyText;
+      if (!knownSender) {
+        toast(`Текст расшифрован, но это ключ не того собеседника, чей ключ вы сохранили. Отпечаток отправителя: ${opened.senderFingerprint}`, 'warn', 9000);
+      } else {
+        toast('Расшифровано. Отправитель совпадает с сохранённым ключом.', 'ok');
+      }
+    } catch (error) {
+      showDecryptError(errText(error));
+      toast(errText(error), 'err');
+    } finally {
+      button.dataset.busy = '';
+      updateAvailability();
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Файлы                                                               */
+  /* ------------------------------------------------------------------ */
+
+  function pickFile(target) {
+    state.pendingFileTarget = target;
+    $('#file-input').value = '';
+    $('#file-input').click();
+  }
+
+  async function handleFile(file) {
+    const text = await file.text();
+    if (state.pendingFileTarget === 'peer') {
+      $('#peer-input').value = text.trim();
+      await savePeerKey(text);
+    } else {
+      if (!$('#peer-input').value && /PUBLIC KEY/.test(text)) {
+        $('#peer-input').value = text.trim();
+        await savePeerKey(text);
+      } else {
+        await importOwnFromText(text, null);
+      }
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Диалоги                                                             */
+  /* ------------------------------------------------------------------ */
+
+  function openDialog(selector) {
+    const dialog = $(selector);
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  }
+
+  async function runSelfTest() {
+    const list = $('#test-list');
+    const summary = $('#test-summary');
+    list.innerHTML = '';
+    summary.textContent = 'Идёт проверка…';
+    const started = Date.now();
+    const seen = new Map();
+
+    const onStep = (step) => {
+      let li = seen.get(step.name);
+      if (!li) {
+        li = document.createElement('li');
+        li.innerHTML = '<span class="mark">…</span><span class="name"></span><span class="ms"></span>';
+        list.appendChild(li);
+        seen.set(step.name, li);
+      }
+      li.className = step.ok ? 'pass' : 'fail';
+      li.querySelector('.mark').textContent = step.ok ? '✓' : '✗';
+      li.querySelector('.name').textContent = step.name;
+      li.querySelector('.name').innerHTML = `${step.name}${step.detail ? `<span class="detail"> — ${step.detail}</span>` : ''}`;
+      li.querySelector('.ms').textContent = `${step.ms} мс`;
+      scrollTo(li, { block: 'nearest' });
+    };
+
+    const button = $('#run-test-btn');
+    button.disabled = true;
+    try {
+      const results = await core.selfTest(onStep);
+      const failed = results.filter((r) => !r.ok).length;
+      const total = Date.now() - started;
+      summary.innerHTML = failed === 0
+        ? `<span class="ok-text">Все ${results.length} проверок пройдены за ${total} мс.</span> Шифрование на этом устройстве работает: секрет доходит до адресата, чужой ключ и подделка — отклоняются.`
+        : `<span class="danger-text">Упало проверок: ${failed} из ${results.length}.</span> Не используйте этот браузер для секретов до выяснения причин.`;
+      toast(failed === 0 ? 'Самопроверка пройдена полностью.' : `Самопроверка: ошибок ${failed}.`, failed === 0 ? 'ok' : 'err');
+    } catch (error) {
+      summary.textContent = errText(error);
+      toast(errText(error), 'err');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Привязка событий                                                    */
+  /* ------------------------------------------------------------------ */
+
+  function bind() {
+    $('#self-test-btn').addEventListener('click', () => openDialog('#test-dialog'));
+    $('#help-btn').addEventListener('click', () => openDialog('#help-dialog'));
+    $('#run-test-btn').addEventListener('click', runSelfTest);
+
+    document.querySelectorAll('dialog [data-close], dialog').forEach((el) => {
+      if (el.tagName === 'DIALOG') {
+        el.addEventListener('click', (event) => {
+          if (event.target === el) el.close();
+        });
+      } else {
+        el.addEventListener('click', () => el.closest('dialog').close());
+      }
+    });
+
+    $('#protect-toggle').addEventListener('change', (event) => {
+      $('#protect-field').classList.toggle('hidden', !event.target.checked);
+      if (event.target.checked) $('#protect-pass').focus();
+    });
+
+    $('#generate-btn').addEventListener('click', generateOwn);
+    $('#reset-own-btn').addEventListener('click', resetOwn);
+    $('#import-own-btn').addEventListener('click', () => pickFile('own'));
+    $('#unlock-btn').addEventListener('click', unlockOwn);
+    $('#unlock-pass').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') unlockOwn();
+    });
+
+    $('#download-pub-btn').addEventListener('click', () => {
+      if (!state.identity) return;
+      download('encryptory-public-key.txt', `${core.publicKeyArmor(state.identity.publicKeyText)}`);
+      toast('Файл с публичным ключом сохранён — его можно отдавать кому угодно.', 'ok');
+    });
+
+    $('#download-priv-btn').addEventListener('click', () => {
+      if (!state.ownArmor) return;
+      download('encryptory-private-key.txt', state.ownArmor.trim() + '\n');
+      toast(state.ownProtected
+        ? 'Приватный ключ сохранён (защищён паролем). Держите файл отдельно от переписки.'
+        : 'Приватный ключ сохранён. Никому не передавайте этот файл!', 'warn', 6000);
+    });
+
+    $('#show-priv-btn').addEventListener('click', () => {
+      const box = $('#own-priv');
+      box.classList.toggle('hidden');
+      if (!box.classList.contains('hidden')) box.focus();
+    });
+
+    $('#save-peer-btn').addEventListener('click', () => savePeerKey());
+    $('#import-peer-btn').addEventListener('click', () => pickFile('peer'));
+    $('#clear-peer-btn').addEventListener('click', clearPeerKey);
+
+    // Правка текста ключа: если он всё ещё читается как тот же ключ — ничего не меняем,
+    // если превратился в другое ключе или мусор — снимаем «сохранён» и просим сохранить заново.
+    $('#peer-input').addEventListener('input', () => {
+      const value = $('#peer-input').value.trim();
+      if (!state.peer) return updateAvailability();
+      let keep = false;
+      if (value) {
+        try {
+          keep = core.parsePublicKey(value).text === state.peer.text;
+        } catch (error) {
+          keep = false;
+        }
+      }
+      if (!keep) {
+        state.peer = null;
+        state.peerText = null;
+        renderPeer();
+        saveSession();
+      }
+      updateAvailability();
+    });
+
+    $('#encrypt-btn').addEventListener('click', (event) => doEncrypt(event.currentTarget, false));
+    $('#self-check-btn').addEventListener('click', (event) => doSelfCheck(event.currentTarget));
+    $('#decrypt-btn').addEventListener('click', doDecrypt);
+
+    $('#paste-btn').addEventListener('click', async (event) => {
+      try {
+        const text = await navigator.clipboard.readText();
+        $('#ciphertext').value = text.trim();
+        updateAvailability();
+        toast('Вставлено из буфера.', 'ok');
+      } catch (error) {
+        toast('Браузер не дал доступ к буферу — вставьте вручную (Ctrl/Cmd+V).', 'warn');
+      }
+    });
+
+    $('#clear-in-btn').addEventListener('click', () => {
+      $('#ciphertext').value = '';
+      $('#dec-out-block').hidden = true;
+      $('#dec-meta').textContent = '';
+      removeError('#dec-error');
+      updateAvailability();
+    });
+
+    $('#clear-out-btn').addEventListener('click', () => {
+      $('#dec-out').value = '';
+      $('#dec-out-block').hidden = true;
+      $('#dec-meta').textContent = '';
+    });
+
+    $('#file-input').addEventListener('change', async (event) => {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      try {
+        await handleFile(file);
+      } catch (error) {
+        toast(errText(error), 'err');
+      }
+    });
+
+    document.addEventListener('click', (event) => {
+      const copyBtn = event.target.closest('[data-copy]');
+      if (copyBtn) copyFrom(copyBtn.dataset.copy, copyBtn);
+      const selectBtn = event.target.closest('[data-select]');
+      if (selectBtn) {
+        const target = $(selectBtn.dataset.select);
+        target.focus();
+        target.select();
+      }
+    });
+
+    $('#plaintext').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) doEncrypt($('#encrypt-btn'), false);
+    });
+    $('#ciphertext').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) doDecrypt();
+    });
+    $('#ciphertext').addEventListener('input', updateAvailability);
+    $('#plaintext').addEventListener('input', () => {
+      $('#local-check').hidden = true;
+      const length = $('#plaintext').value.length;
+      $('#enc-meta').textContent = length ? `${length} симв.` : '';
+      removeError('#enc-error');
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Старт                                                               */
+  /* ------------------------------------------------------------------ */
+
+  async function restoreSession() {
+    const saved = loadSession();
+    if (!saved) return;
+    if (saved.peer) {
+      try {
+        const parsed = core.parsePublicKey(saved.peer);
+        state.peer = { text: parsed.text, fingerprint: await core.fingerprint(parsed.raw) };
+        state.peerText = parsed.text;
+        $('#peer-input').value = core.publicKeyArmor(parsed.text).trim();
+      } catch (error) {
+        /* ключ собеседника был битый — молча начинаем заново */
+      }
+    }
+    if (saved.ownArmor) {
+      if (saved.ownProtected || core.isPrivateKeyProtected(saved.ownArmor)) {
+        state.lockedArmor = saved.ownArmor;
+      } else {
+        try {
+          const identity = await core.importPrivateKey(saved.ownArmor, null);
+          state.identity = identity;
+          state.ownArmor = saved.ownArmor;
+        } catch (error) {
+          state.lockedArmor = saved.ownArmor;
+        }
+      }
+    }
+  }
+
+  async function main() {
+    if (!core) {
+      toast('Не загрузилось ядро шифрования (src/encryptory-core.js).', 'err', 120000);
+      return;
+    }
+    $('#algo-label').textContent = core.ALGO_LABEL;
+    bind();
+    await restoreSession();
+    render();
+    $('#enc-meta').textContent = '';
+    if (state.lockedArmor) toast('Приватный ключ защищён паролем — введите его, чтобы начать.', 'warn', 8000);
+  }
+
+  document.addEventListener('DOMContentLoaded', main);
+})();
+</script>
+</body>
+</html>

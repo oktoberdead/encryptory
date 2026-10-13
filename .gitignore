@@ -1,0 +1,13 @@
+# зависимости не нужны, но на всякий случай — если кто-то поставит инструменты
+node_modules/
+npm-debug.log*
+
+# локальные ключи и рабочие файлы: их не место в репозитории
+*-private.txt
+*-public.txt
+keys/
+message.txt
+*.local.html
+
+.DS_Store
+Thumbs.db

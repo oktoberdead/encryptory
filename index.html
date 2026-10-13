@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Encryptory — шифрование текста между двумя людьми</title>
+<meta name="description" content="Мини-приложение: шифрует текст для конкретного человека. Ключи генерируются и обмениваются локально, шифрование целиком в браузере.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0f17">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="bg-glow" aria-hidden="true"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="10.5" width="16" height="10" rx="2.5"></rect>
+        <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path>
+        <circle cx="12" cy="15.5" r="1.3" fill="currentColor" stroke="none"></circle>
+      </svg>
+    </span>
+    <span class="brand-text">
+      <strong>Encryptory</strong>
+      <small id="algo-label">ECDH P-256 → HKDF-SHA256 → AES-256-GCM</small>
+    </span>
+  </div>
+  <div class="topbar-actions">
+    <button type="button" class="btn btn-ghost" id="self-test-btn">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>
+      Самопроверка
+    </button>
+    <button type="button" class="btn btn-ghost" id="help-btn" aria-haspopup="dialog">Как это работает</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ============================ КЛЮЧИ ============================ -->
+  <section class="panel keys-panel" aria-labelledby="keys-title">
+    <div class="panel-head">
+      <h2 id="keys-title"><span class="step">1</span> Ключи</h2>
+      <span class="chip" id="key-status" data-state="warn">Ключей пока нет</span>
+    </div>
+
+    <div class="keys-grid">
+
+      <!-- Мой ключ -->
+      <div class="key-card" id="own-card">
+        <div class="key-card-head">
+          <h3>Моя пара ключей</h3>
+          <span class="fp" id="own-fp" hidden></span>
+        </div>
+
+        <div id="own-empty">
+          <p class="hint">
+            Приватный ключ остаётся у вас, публичный — можно отдавать кому угодно.
+            Собеседнику нужен именно публичный.
+          </p>
+          <label class="checkbox">
+            <input type="checkbox" id="protect-toggle">
+            <span>Защитить приватный ключ паролем <em>(нужен будет при каждом открытии страницы)</em></span>
+          </label>
+          <div class="field hidden" id="protect-field">
+            <input type="password" id="protect-pass" placeholder="Пароль для приватного ключа" autocomplete="new-password">
+          </div>
+          <div class="row">
+            <button type="button" class="btn btn-primary" id="generate-btn">Создать мою пару ключей</button>
+            <button type="button" class="btn" id="import-own-btn">Импортировать ключ</button>
+          </div>
+        </div>
+
+        <div id="own-ready" hidden>
+          <p class="label">Мой публичный ключ — передайте его собеседнику</p>
+          <textarea class="mono key-box" id="own-pub" readonly rows="4" spellcheck="false" aria-label="Мой публичный ключ"></textarea>
+          <div class="row row-tight">
+            <button type="button" class="btn btn-sm" data-copy="#own-pub">Копировать</button>
+            <button type="button" class="btn btn-sm" id="download-pub-btn">Скачать файлом</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-select="#own-pub">Выделить всё</button>
+          </div>
+
+          <details class="own-private">
+            <summary>Приватный ключ <span class="warn-text">— никому не передавайте</span></summary>
+            <div class="row row-tight">
+              <button type="button" class="btn btn-sm btn-danger" id="download-priv-btn">Скачать приватный ключ</button>
+              <button type="button" class="btn btn-sm" id="show-priv-btn">Показать</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-copy="#own-priv">Копировать</button>
+            </div>
+            <textarea class="mono key-box priv-box hidden" id="own-priv" readonly rows="4" spellcheck="false" aria-label="Мой приватный ключ"></textarea>
+            <p class="hint" id="priv-hint"></p>
+          </details>
+
+          <div class="row row-tight">
+            <button type="button" class="btn btn-sm btn-ghost" id="reset-own-btn">Сбросить и создать новую пару</button>
+          </div>
+        </div>
+
+        <div id="own-locked" hidden>
+          <p class="hint">Приватный ключ защищён паролем. Введите пароль, чтобы разблокировать его в этой вкладке.</p>
+          <div class="field row-tight">
+            <input type="password" id="unlock-pass" placeholder="Пароль" autocomplete="current-password">
+            <button type="button" class="btn" id="unlock-btn">Разблокировать</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ключ собеседника -->
+      <div class="key-card" id="peer-card">
+        <div class="key-card-head">
+          <h3>Ключ собеседника</h3>
+          <span class="fp" id="peer-fp" hidden></span>
+        </div>
+        <p class="hint">Вставьте публичный ключ, который вам прислали. Лучше — сверьте отпечаток голосом.</p>
+        <textarea class="mono key-box" id="peer-input" rows="4" spellcheck="false" placeholder="-----BEGIN ENCRYPTORY PUBLIC KEY-----&#10;epk1.…&#10;-----END ENCRYPTORY PUBLIC KEY-----" aria-label="Публичный ключ собеседника"></textarea>
+        <div class="row row-tight">
+          <button type="button" class="btn btn-primary btn-sm" id="save-peer-btn">Сохранить ключ</button>
+          <button type="button" class="btn btn-sm" id="import-peer-btn">Из файла</button>
+          <button type="button" class="btn btn-sm btn-ghost" id="clear-peer-btn">Очистить</button>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ========================== РАБОЧАЯ ЗОНА ========================== -->
+  <div class="workspace">
+
+    <!-- Шифрование -->
+    <section class="panel" aria-labelledby="enc-title">
+      <div class="panel-head">
+        <h2 id="enc-title"><span class="step">2</span> Зашифровать</h2>
+        <span class="chip" id="enc-chip">нужен ключ собеседника</span>
+      </div>
+
+      <label class="label" for="plaintext">Текст, который нужно спрятать</label>
+      <textarea id="plaintext" rows="7" placeholder="Введите текст… (всё остаётся в браузере)" spellcheck="false"></textarea>
+
+      <div class="row">
+        <button type="button" class="btn btn-primary" id="encrypt-btn" disabled>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path></svg>
+          Зашифровать для собеседника
+        </button>
+        <button type="button" class="btn" id="self-check-btn" disabled title="Шифрует текст и тут же расшифровывает его на этой машине — чтобы убедиться, что всё работает">
+          Локальная проверка
+        </button>
+        <span class="spacer"></span>
+        <span class="meta" id="enc-meta"></span>
+      </div>
+      <p class="hint hint-sm" id="self-check-hint">
+        «Локальная проверка» шифрует текст дважды — самому себе и временному локальному «двойнику» — и тут же расшифровывает обе посылки,
+        сравнивая результат с исходным текстом. Приватный ключ собеседника для этого не нужен (его у вас и нет): проверка доказывает,
+        что шифрование на этой машине работает и «каша» превращается обратно в текст.
+      </p>
+
+      <div class="output-block" id="enc-out-block" hidden>
+        <div class="output-head">
+          <span class="label">Шифротекст — отдайте его собеседнику</span>
+          <div class="row row-tight">
+            <button type="button" class="btn btn-sm" data-copy="#enc-out">Копировать</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-select="#enc-out">Выделить всё</button>
+          </div>
+        </div>
+        <textarea class="mono" id="enc-out" readonly rows="6" spellcheck="false" aria-label="Шифротекст"></textarea>
+      </div>
+
+      <div class="local-check" id="local-check" hidden>
+        <div class="output-head">
+          <span class="label ok-text">Результат локальной расшифровки <em>(должен совпасть с исходным текстом)</em></span>
+          <span class="badge-ok" id="local-verdict"></span>
+        </div>
+        <ul class="check-list" id="local-steps"></ul>
+        <textarea id="local-out" readonly rows="4" spellcheck="false" aria-label="Результат локальной расшифровки"></textarea>
+        <details class="local-details">
+          <summary>Показать проверочный шифротекст</summary>
+          <p class="hint">Он создан для временного двойника, который жил только в этой вкладке и уже уничтожен. Отправлять его никому не нужно.</p>
+          <textarea class="mono" id="local-ct" readonly rows="4" spellcheck="false" aria-label="Проверочный шифротекст"></textarea>
+          <div class="row row-tight">
+            <button type="button" class="btn btn-sm" data-copy="#local-ct">Копировать</button>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <!-- Расшифровка -->
+    <section class="panel" aria-labelledby="dec-title">
+      <div class="panel-head">
+        <h2 id="dec-title"><span class="step">3</span> Расшифровать</h2>
+        <span class="chip" id="dec-chip">нужен мой приватный ключ</span>
+      </div>
+
+      <label class="label" for="ciphertext">Шифротекст, который вам прислали</label>
+      <textarea class="mono" id="ciphertext" rows="7" spellcheck="false" placeholder="-----BEGIN ENCRYPTORY MESSAGE-----&#10;em1.…&#10;-----END ENCRYPTORY MESSAGE-----" aria-label="Шифротекст для расшифровки"></textarea>
+
+      <div class="row">
+        <button type="button" class="btn btn-primary" id="decrypt-btn" disabled>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 7.4-2"></path></svg>
+          Расшифровать
+        </button>
+        <button type="button" class="btn" id="paste-btn">Вставить из буфера</button>
+        <button type="button" class="btn btn-ghost" id="clear-in-btn">Очистить</button>
+        <span class="spacer"></span>
+        <span class="meta" id="dec-meta"></span>
+      </div>
+
+      <div class="output-block" id="dec-out-block" hidden>
+        <div class="output-head">
+          <span class="label">Расшифрованный текст</span>
+          <div class="row row-tight">
+            <button type="button" class="btn btn-sm" data-copy="#dec-out">Копировать</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-select="#dec-out">Выделить всё</button>
+            <button type="button" class="btn btn-sm btn-ghost" id="clear-out-btn">Очистить</button>
+          </div>
+        </div>
+        <textarea id="dec-out" readonly rows="6" spellcheck="false" aria-label="Расшифрованный текст"></textarea>
+      </div>
+    </section>
+
+  </div>
+
+  <section class="panel notes-panel">
+    <h2><span class="step">i</span> Что стоит помнить</h2>
+    <div class="notes-grid">
+      <div class="note">
+        <h3>Обмен ключами — только лично</h3>
+        <p>Публичный ключ собеседника надёжнее получить лично или по другому каналу и сверить отпечаток. Если подменить ключ, собеседник получит «кашу на имя чужого человека» — расшифровать он не сможет, а злоумышленник сможет.</p>
+      </div>
+      <div class="note">
+        <h3>Канал связи не важен</h3>
+        <p>Шифротекст можно отправлять хоть в открытом чате. Секрет не даёт ничего, кто им не имеет вашего приватного ключа.</p>
+      </div>
+      <div class="note">
+        <h3>Подделка не пройдёт молча</h3>
+        <p>AES-256-GCM проверяет целостность: если шифротекст испортили в пути или ключ не тот — вы увидите ошибку, а не «мусор» на выходе.</p>
+      </div>
+      <div class="note">
+        <h3>Приватный ключ — это вы</h3>
+        <p>Потеряли ключ — старые послания не прочитать. Утёк приватный ключ — собеседники больше не в безопасности. Держите его отдельным файлом.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <span>Шифрование происходит целиком в вашем браузере: на сервер не уходит ни текст, ни ключи (их тут и нет).</span>
+    <span class="footer-links">
+      <!-- standalone-link:start -->
+      <a href="dist/encryptory-standalone.html" class="link" download>Автономная сборка (один HTML-файл)</a>
+      <span class="dot">·</span>
+      <!-- standalone-link:end -->
+      <a href="https://developer.mozilla.org/ru/docs/Web/API/Web_Crypto_API" class="link" target="_blank" rel="noreferrer noopener">WebCrypto API</a>
+    </span>
+  </footer>
+</main>
+
+<!-- ============================ Диалоги ============================ -->
+<dialog id="help-dialog">
+  <article class="dialog-body">
+    <header class="dialog-head">
+      <h2>Как этим пользоваться</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </header>
+    <div class="dialog-content">
+      <ol class="steps">
+        <li><strong>Каждый создаёт свою пару ключей</strong> у себя на странице. Приватный ключ остаётся у хозяина, публичный можно отдавать всем.</li>
+        <li><strong>Обменяйтесь публичными ключами</strong> локально: лично по AirDrop/флешке/QR или через любой канал, но обязательно сверьте <em>отпечаток</em> — короткую строку вроде <code>K3PQ-7V2M-…</code> — голосом или глазами.</li>
+        <li><strong>Отправитель</strong> вставляет ключ собеседника, пишет текст и жмёт «Зашифровать». Получается бронированный текст — его можно отправлять хоть в открытый мессенджер.</li>
+        <li><strong>Получатель</strong> вставляет шифротекст, жмёт «Расшифровать» — и читает исходный текст. Свой ключ при этом никуда не отправляется.</li>
+      </ol>
+
+      <h3>«Локальная проверка»</h3>
+      <p class="muted">
+        Шифрует текст дважды — самому себе и временному локальному «двойнику» — и тут же расшифровывает обе посылки,
+        сравнивая результат с исходным текстом. Ещё две проверки: посторонний ключ не должен прочитать посылку, и исходный текст
+        не должен угадываться в шифротексте. Так можно убедиться, что на этой машине всё работает.
+      </p>
+      <p class="muted">
+        Свою посылку собеседнику расшифровать локально нельзя — для этого нужен его приватный ключ, а он есть только у него.
+        Это не ограничение утилиты, а суть асимметричного шифрования: читать может только адресат.
+      </p>
+
+      <h3>Что под капотом</h3>
+      <p class="muted">
+        У каждого участника пара ключей ECDH P-256. Стороны обмениваются <em>публичными</em> ключами. Затем:
+        мой приватный × его публичный = общий секрет, одинаковый у обоих. Из секрета через HKDF-SHA256
+        выводится одноразовый ключ AES-256-GCM, и уже им шифруется текст. Приватные ключи не покидают устройство
+        и нигде не публикуются — схема асимметричная, общий пароль не нужен.
+      </p>
+
+      <h3>Формат контейнера</h3>
+      <p class="muted">
+        <code>em1.&lt;ключ отправителя&gt;.&lt;соль&gt;.&lt;nonce&gt;.&lt;время&gt;.&lt;шифротекст&gt;</code> в броне
+        <code>-----BEGIN ENCRYPTORY MESSAGE-----</code>. Переносы строк и лишние пробелы при вставке не мешают.
+      </p>
+
+      <h3>Ограничения</h3>
+      <ul class="muted">
+        <li>Это инструмент для текста, а не мессенджер: переписка и метаданные никуда не прячутся.</li>
+        <li>Ключ отправителя виден в контейнере — получатель может сверить отпечаток отправителя и убедиться, что сообщение пришло от него.</li>
+        <li>Защита приватного ключа паролем — это PBKDF2-SHA256 (310 000 итераций) + AES-256-GCM. Пароль лучше выбирать длинный.</li>
+      </ul>
+    </div>
+    <footer class="dialog-foot">
+      <button type="button" class="btn btn-primary" data-close>Понятно</button>
+    </footer>
+  </article>
+</dialog>
+
+<dialog id="test-dialog">
+  <article class="dialog-body wide">
+    <header class="dialog-head">
+      <h2>Самопроверка на этом устройстве</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Закрыть">✕</button>
+    </header>
+    <div class="dialog-content">
+      <p class="muted">Сейчас в этой вкладке будут сгенерированы три пары ключей, зашифровано и расшифровано несколько сообщений, а также проверено, что подделка и чужой ключ дают отказ. Ничего не сохраняется.</p>
+      <div class="summary" id="test-summary"></div>
+      <ol class="test-list" id="test-list"></ol>
+    </div>
+    <footer class="dialog-foot">
+      <button type="button" class="btn btn-primary" id="run-test-btn">Запустить проверки</button>
+      <button type="button" class="btn" data-close>Закрыть</button>
+    </footer>
+  </article>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+<input type="file" id="file-input" accept=".txt,.key,.pub,text/plain" hidden>
+
+<noscript>
+  <p style="padding:16px">Для работы Encryptory нужен JavaScript — всё шифрование выполняется в браузере.</p>
+</noscript>
+
+<script src="src/encryptory-core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
